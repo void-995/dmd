@@ -1164,11 +1164,17 @@ struct ASTBase
          */
         bool mangleOnly;
 
-        extern (D) this(const ref Loc loc, Identifier ident, Dsymbols* members, bool mangleOnly)
+        /**
+         * Namespace identifier resolved during semantic.
+         */
+        Expression identExp;
+
+        extern (D) this(const ref Loc loc, Identifier ident, Expression identExp, Dsymbols* members, bool mangleOnly)
         {
             super(ident);
             this.loc = loc;
             this.members = members;
+            this.identExp = identExp;
             this.mangleOnly = mangleOnly;
         }
 
@@ -1180,13 +1186,13 @@ struct ASTBase
 
     extern (C++) final class CompileDeclaration : AttribDeclaration
     {
-        Expression exp;
+        Expressions* exps;
 
-        extern (D) this(const ref Loc loc, Expression exp)
+        extern (D) this(const ref Loc loc, Expressions* exps)
         {
             super(null);
             this.loc = loc;
-            this.exp = exp;
+            this.exps = exps;
         }
 
         override void accept(Visitor v)
@@ -4132,6 +4138,33 @@ struct ASTBase
         }
     }
 
+    extern (C++) class TypeTraits : Type
+    {
+        TraitsExp exp;
+        Loc loc;
+        bool inAliasDeclaration;
+
+        extern (D) this(const ref Loc loc, TraitsExp exp)
+        {
+            super(Tident);
+            this.loc = loc;
+            this.exp = exp;
+        }
+
+        override void accept(Visitor v)
+        {
+            v.visit(this);
+        }
+
+        override Type syntaxCopy()
+        {
+            TraitsExp te = cast(TraitsExp) exp.syntaxCopy();
+            TypeTraits tt = new TypeTraits(loc, te);
+            tt.mod = mod;
+            return tt;
+        }
+    }
+
     extern (C++) final class TypeIdentifier : TypeQualified
     {
         Identifier ident;
@@ -6041,13 +6074,24 @@ struct ASTBase
         }
     }
 
+    enum InitKind : ubyte
+    {
+        void_,
+        error,
+        struct_,
+        array,
+        exp,
+    }
+
     extern (C++) class Initializer : RootObject
     {
         Loc loc;
+        InitKind kind;
 
-        final extern (D) this(const ref Loc loc)
+        final extern (D) this(const ref Loc loc, InitKind kind)
         {
             this.loc = loc;
+            this.kind = kind;
         }
 
         // this should be abstract and implemented in child classes
@@ -6056,9 +6100,9 @@ struct ASTBase
             return null;
         }
 
-        ExpInitializer isExpInitializer()
+        final ExpInitializer isExpInitializer()
         {
-            return null;
+            return kind == InitKind.exp ? cast(ExpInitializer)cast(void*)this : null;
         }
 
         void accept(Visitor v)
@@ -6073,13 +6117,8 @@ struct ASTBase
 
         extern (D) this(const ref Loc loc, Expression exp)
         {
-            super(loc);
+            super(loc, InitKind.exp);
             this.exp = exp;
-        }
-
-        override ExpInitializer isExpInitializer()
-        {
-            return this;
         }
 
         override void accept(Visitor v)
@@ -6095,7 +6134,7 @@ struct ASTBase
 
         extern (D) this(const ref Loc loc)
         {
-            super(loc);
+            super(loc, InitKind.struct_);
         }
 
         void addInit(Identifier field, Initializer value)
@@ -6119,7 +6158,7 @@ struct ASTBase
 
         extern (D) this(const ref Loc loc)
         {
-            super(loc);
+            super(loc, InitKind.array);
         }
 
         void addInit(Expression index, Initializer value)
@@ -6140,7 +6179,7 @@ struct ASTBase
     {
         extern (D) this(const ref Loc loc)
         {
-            super(loc);
+            super(loc, InitKind.void_);
         }
 
         override void accept(Visitor v)

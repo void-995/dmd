@@ -91,6 +91,7 @@ enum ENUMTY
     Tvector,
     Tint128,
     Tuns128,
+    TTraits,
     TMAX
 };
 typedef unsigned char TY;       // ENUMTY
@@ -225,7 +226,7 @@ public:
     bool equals(RootObject *o);
     bool equivalent(Type *t);
     // kludge for template.isType()
-    int dyncast() const { return DYNCAST_TYPE; }
+    DYNCAST dyncast() const { return DYNCAST_TYPE; }
     int covariant(Type *t, StorageClass *pstc = NULL, bool fix17349 = true);
     const char *toChars();
     char *toPrettyChars(bool QualifyTypes = false);
@@ -580,6 +581,19 @@ public:
     void accept(Visitor *v) { v->visit(this); }
 };
 
+class TypeTraits : public Type
+{
+    Loc loc;
+    /// The expression to resolve as type or symbol.
+    TraitsExp *exp;
+    /// The symbol when exp doesn't represent a type.
+    Dsymbol *sym;
+    /// Indicates wether we are in an alias or not.
+    bool inAliasDeclaration;
+    Type *syntaxCopy();
+    void accept(Visitor *v) { v->visit(this); }
+};
+
 class TypeQualified : public Type
 {
 public:
@@ -799,7 +813,7 @@ public:
     Parameter *syntaxCopy();
     Type *isLazyArray();
     // kludge for template.isType()
-    int dyncast() const { return DYNCAST_PARAMETER; }
+    DYNCAST dyncast() const { return DYNCAST_PARAMETER; }
     virtual void accept(Visitor *v) { v->visit(this); }
 
     static size_t dim(Parameters *parameters);

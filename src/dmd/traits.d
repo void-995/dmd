@@ -82,7 +82,7 @@ struct PushAttributes
  * Returns:
  *      Dsymbol  the corresponding symbol for oarg
  */
-private Dsymbol getDsymbolWithoutExpCtx(RootObject oarg)
+Dsymbol getDsymbolWithoutExpCtx(RootObject oarg)
 {
     if (auto e = isExpression(oarg))
     {
@@ -90,6 +90,8 @@ private Dsymbol getDsymbolWithoutExpCtx(RootObject oarg)
             return (cast(DotVarExp)e).var;
         if (e.op == TOK.dotTemplateDeclaration)
             return (cast(DotTemplateExp)e).td;
+        if (e.op == TOK.scope_)
+            return (cast(ScopeExp)e).sds;
     }
     return getDsymbol(oarg);
 }
@@ -827,7 +829,7 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
                 return ex.expressionSemantic(sc);
             }
         }
-        return resolve(e.loc, sc, s, false);
+        return symbolToExp(s, e.loc, sc, false);
     }
     if (e.ident == Id.hasMember ||
         e.ident == Id.getMember ||
@@ -1069,14 +1071,9 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         auto o = (*e.args)[0];
         auto s = getDsymbol(o);
         auto ad = s ? s.isAggregateDeclaration() : null;
-        if (!ad)
-        {
-            e.error("argument is not an aggregate type");
-            return new ErrorExp();
-        }
 
         auto exps = new Expressions();
-        if (ad.aliasthis)
+        if (ad && ad.aliasthis)
             exps.push(new StringExp(e.loc, cast(char*)ad.aliasthis.ident.toChars()));
         Expression ex = new TupleExp(e.loc, exps);
         ex = ex.expressionSemantic(sc);

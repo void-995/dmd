@@ -11,6 +11,21 @@ void test(int ij)
 }
 
 /*******************************************/
+// https://issues.dlang.org/show_bug.cgi?id=18010
+
+void test1()
+{
+    int[10] a1 = void;
+    int[10] a2 = void;
+    a1[] = a2[];
+}
+
+void test2(int[] a1, int[] a2)
+{
+    a1[] = a2[];
+}
+
+/*******************************************/
 // https://issues.dlang.org/show_bug.cgi?id=17843
 
 struct S
@@ -26,6 +41,7 @@ extern (C) void main()
     test(1);
     test18472();
     testRuntimeLowerings();
+    test18457();
 }
 
 /*******************************************/
@@ -156,3 +172,31 @@ void testRuntimeLowerings()
             break;
     }
 }
+
+/**********************************************/
+// https://issues.dlang.org/show_bug.cgi?id=18457
+
+__gshared int dtor;
+
+struct S18457
+{
+    int a = 3;
+    ~this() { a = 0; ++dtor; }
+}
+
+S18457 myFunction()
+{
+    S18457 s = S18457();
+    return s;
+}
+
+void test18457()
+{
+    {
+        S18457 s = myFunction();
+        assert(s.a == 3);
+        assert(dtor == 0);
+    }
+    assert(dtor == 1);
+}
+

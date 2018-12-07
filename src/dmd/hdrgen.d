@@ -124,7 +124,8 @@ public:
 
     override void visit(ExpStatement s)
     {
-        if (s.exp && s.exp.op == TOK.declaration)
+        if (s.exp && s.exp.op == TOK.declaration &&
+            (cast(DeclarationExp)s.exp).declaration)
         {
             // bypass visit(DeclarationExp)
             (cast(DeclarationExp)s.exp).declaration.accept(this);
@@ -636,7 +637,8 @@ public:
     {
         buf.writestring(Token.toString(s.tok));
         buf.writeByte(' ');
-        s.statement.accept(this);
+        if (s.statement)
+            s.statement.accept(this);
     }
 
     override void visit(ThrowStatement s)
@@ -795,6 +797,12 @@ public:
     {
         //printf("TypeBasic::toCBuffer2(t.mod = %d)\n", t.mod);
         buf.writestring(t.dstring);
+    }
+
+    override void visit(TypeTraits t)
+    {
+        //printf("TypeBasic::toCBuffer2(t.mod = %d)\n", t.mod);
+        visit(t.exp);
     }
 
     override void visit(TypeVector t)
@@ -1411,7 +1419,7 @@ public:
     override void visit(CompileDeclaration d)
     {
         buf.writestring("mixin(");
-        d.exp.accept(this);
+        argsToBuffer(d.exps, null);
         buf.writestring(");");
         buf.writenl();
     }
@@ -1841,7 +1849,7 @@ public:
                 buf.writeByte(' ');
             typeToBuffer(d.type, d.ident);
         }
-        else
+        else if (d.ident)
         {
             declstring = (d.ident == Id.string || d.ident == Id.wstring || d.ident == Id.dstring);
             buf.writestring(d.ident.toString());
@@ -2724,19 +2732,21 @@ public:
          * are handled in visit(ExpStatement), so here would be used only when
          * we'll directly call Expression.toChars() for debugging.
          */
-        if (auto v = e.declaration.isVarDeclaration())
+        if (e.declaration)
         {
+            if (auto v = e.declaration.isVarDeclaration())
+            {
             // For debugging use:
             // - Avoid printing newline.
             // - Intentionally use the format (Type var;)
             //   which isn't correct as regular D code.
-            buf.writeByte('(');
-            visitVarDecl(v, false);
-            buf.writeByte(';');
-            buf.writeByte(')');
+                buf.writeByte('(');
+                visitVarDecl(v, false);
+                buf.writeByte(';');
+                buf.writeByte(')');
+            }
+            else e.declaration.accept(this);
         }
-        else
-            e.declaration.accept(this);
     }
 
     override void visit(TypeidExp e)

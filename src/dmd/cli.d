@@ -169,14 +169,25 @@ struct Usage
         Option("c",
             "compile only, do not link"
         ),
+        Option("checkaction=D|C|halt",
+            "behavior on assert/boundscheck/finalswitch failure",
+            `Sets behavior when an assert fails, and array boundscheck fails,
+             or a final switch errors.
+                $(UL
+                    $(LI $(I D): Default behavior, which throws an unrecoverable $(D Error).)
+                    $(LI $(I C): Calls the C runtime library assert failure function.)
+                    $(LI $(I halt): Executes a halt instruction, terminating the program.)
+                )`
+        ),
         Option("color",
             "turn colored console output on"
         ),
-        Option("color=[on|off]",
-            "force colored console output on or off",
+        Option("color=[on|off|auto]",
+            "force colored console output on or off, or only when not redirected (default)",
             `Show colored console output. The default depends on terminal capabilities.
             $(UL
-                $(LI $(B on): always use colored output. Same as $(B -color))
+                $(LI $(B auto): use colored output if a tty is detected (default))
+                $(LI $(B on): always use colored output.)
                 $(LI $(B off): never use colored output.)
             )`
         ),
@@ -211,15 +222,15 @@ dmd -cov -unittest myprog.d
             "write documentation file to filename"
         ),
         Option("d",
-            "silently allow deprecated features",
+            "silently allow deprecated features and symbols",
             `Silently allow $(DDLINK deprecate,deprecate,deprecated features) and use of symbols with
             $(DDSUBLINK $(ROOT_DIR)spec/attribute, deprecated, deprecated attributes).`,
         ),
         Option("dw",
-            "show use of deprecated features as warnings (default)"
+            "issue a message when deprecated features or symbols are used (default)"
         ),
         Option("de",
-            "show use of deprecated features as errors (halt compilation)"
+            "issue an error when deprecated features or symbols are used (halt compilation)"
         ),
         Option("debug",
             "compile in debug code",
@@ -446,6 +457,9 @@ dmd -cov -unittest myprog.d
         Option("mcpu=?",
             "list all architecture options"
         ),
+        Option("mixin=<filename>",
+            "expand and save mixins to file specified by <filename>"
+        ),
         Option("mscrtlib=<name>",
             "MS C runtime library to reference from main/WinMain/DllMain",
             "If building MS-COFF object files with -m64 or -m32mscoff, embed a reference to
@@ -615,6 +629,12 @@ dmd -cov -unittest myprog.d
             "fix integral promotions for unary + - ~ operators"),
         Transition(null, "tls", "vtls",
             "list all variables going into thread local storage"),
+        Transition(null, "fixAliasThis", "fixAliasThis",
+            "when a symbol is resolved, check alias this scope before going to upper scopes"),
+        Transition(null, "markdown", "markdown",
+            "enable Markdown replacements in Ddoc"),
+        Transition(null, "vmarkdown", "vmarkdown",
+            "list instances of Markdown replacements in Ddoc"),
     ];
 }
 

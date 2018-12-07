@@ -20,6 +20,7 @@ import core.stdc.time;
 import dmd.aggregate;
 import dmd.arraytypes;
 import dmd.attrib;
+import dmd.cond;
 import dmd.dclass;
 import dmd.declaration;
 import dmd.denum;
@@ -134,7 +135,7 @@ private class Section
                 char c = name[u];
                 buf.writeByte((c == '_') ? ' ' : c);
             }
-            escapeStrayParenthesis(loc, buf, o);
+            escapeStrayParenthesis(loc, buf, o, false);
             buf.writestring(")");
         }
         else
@@ -144,8 +145,8 @@ private class Section
     L1:
         size_t o = buf.offset;
         buf.write(_body, bodylen);
-        escapeStrayParenthesis(loc, buf, o);
-        highlightText(sc, a, buf, o);
+        escapeStrayParenthesis(loc, buf, o, true);
+        highlightText(sc, a, loc, buf, o);
         buf.writestring(")");
     }
 }
@@ -250,7 +251,7 @@ private final class ParamSection : Section
                             }
                             buf.write(namestart, namelen);
                         }
-                        escapeStrayParenthesis(loc, buf, o);
+                        escapeStrayParenthesis(loc, buf, o, true);
                         highlightCode(sc, a, buf, o);
                     }
                     buf.writestring(")");
@@ -258,8 +259,8 @@ private final class ParamSection : Section
                     {
                         size_t o = buf.offset;
                         buf.write(textstart, textlen);
-                        escapeStrayParenthesis(loc, buf, o);
-                        highlightText(sc, a, buf, o);
+                        escapeStrayParenthesis(loc, buf, o, true);
+                        highlightText(sc, a, loc, buf, o);
                     }
                     buf.writestring(")");
                 }
@@ -296,7 +297,12 @@ private final class ParamSection : Section
             size_t pcount = (tf.parameters ? tf.parameters.dim : 0) + cast(int)(tf.varargs == 1);
             if (pcount != paramcount)
             {
-                warning(s.loc, "Ddoc: parameter count mismatch");
+                warning(s.loc, "Ddoc: parameter count mismatch, expected %d, got %d", pcount, paramcount);
+                if (paramcount == 0)
+                {
+                    // Chances are someone messed up the format
+                    warningSupplemental(s.loc, "Note that the format is `param = description`");
+                }
             }
         }
     }
@@ -416,6 +422,8 @@ extern(C++) void gendocfile(Module m)
     if (m.isDocFile)
     {
         Loc loc = m.md ? m.md.loc : m.loc;
+        if (!loc.filename)
+            loc.filename = srcfilename.ptr;
         size_t commentlen = strlen(cast(char*)m.comment);
         Dsymbols a;
         // https://issues.dlang.org/show_bug.cgi?id=9764
@@ -426,7 +434,7 @@ extern(C++) void gendocfile(Module m)
             dc.macros.write(loc, dc, sc, &a, &buf);
         }
         buf.write(m.comment, commentlen);
-        highlightText(sc, &a, &buf, 0);
+        highlightText(sc, &a, loc, &buf, 0);
     }
     else
     {
@@ -547,8 +555,16 @@ void escapeDdocString(OutBuffer* buf, size_t start)
  * as the macros depend on properly nested parentheses.
  *
  * Fix by replacing unmatched ( with $(LPAREN) and unmatched ) with $(RPAREN).
+ *
+ * Params:
+ *  loc   = source location of start of text. It is a mutable copy to allow incrementing its linenum, for printing the correct line number when an error is encountered in a multiline block of ddoc.
+ *  buf   = an OutBuffer containing the DDoc
+ *  start = the index within buf to start replacing unmatched parentheses
+ *  respectBackslashEscapes = if true, always replace parentheses that are
+ *    directly preceeded by a backslash with $(LPAREN) or $(RPAREN) instead of
+ *    counting them as stray parentheses
  */
-private void escapeStrayParenthesis(Loc loc, OutBuffer* buf, size_t start)
+private void escapeStrayParenthesis(Loc loc, OutBuffer* buf, size_t start, bool respectBackslashEscapes)
 {
     uint par_open = 0;
     char inCode = 0;
@@ -609,6 +625,21 @@ private void escapeStrayParenthesis(Loc loc, OutBuffer* buf, size_t start)
                     inCode = c;
             }
             atLineStart = false;
+            break;
+        case '\\':
+            // replace backslash-escaped parens with their macros
+            if (!inCode && respectBackslashEscapes && u+1 < buf.offset && global.params.markdown)
+            {
+                if (buf.data[u+1] == '(' || buf.data[u+1] == ')')
+                {
+                    const paren = buf.data[u+1] == '(' ? "$(LPAREN)" : "$(RPAREN)";
+                    buf.remove(u, 2); //remove the \)
+                    buf.insert(u, paren); //insert this instead
+                    u += 8; //skip over newly inserted macro
+                }
+                else if (buf.data[u+1] == '\\')
+                    ++u;
+            }
             break;
         default:
             atLineStart = false;
@@ -1078,7 +1109,7 @@ private void emitComment(Dsymbol s, OutBuffer* buf, Scope* sc)
         override void visit(ConditionalDeclaration cd)
         {
             //printf("ConditionalDeclaration::emitComment(sc = %p)\n", sc);
-            if (cd.condition.inc)
+            if (cd.condition.inc != Include.notComputed)
             {
                 visit(cast(AttribDeclaration)cd);
                 return;
@@ -1751,8 +1782,8 @@ struct DocComment
                 buf.writestring("$(DDOC_SUMMARY ");
                 size_t o = buf.offset;
                 buf.write(sec._body, sec.bodylen);
-                escapeStrayParenthesis(loc, buf, o);
-                highlightText(sc, a, buf, o);
+                escapeStrayParenthesis(loc, buf, o, true);
+                highlightText(sc, a, loc, buf, o);
                 buf.writestring(")");
             }
             else
@@ -1783,7 +1814,7 @@ struct DocComment
                     buf.writestring("----\n");
                     buf.writestring(codedoc);
                     buf.writestring("----\n");
-                    highlightText(sc, a, buf, o);
+                    highlightText(sc, a, loc, buf, o);
                 }
                 buf.writestring(")");
             }
@@ -1838,6 +1869,41 @@ private const(char)[] skipwhitespace(const(char)[] p)
         }
     }
     return p[$ .. $];
+}
+
+/************************************************
+ * Scan past all instances of the given characters.
+ * Params:
+ *  buf           = an OutBuffer containing the DDoc
+ *  i             = the index within `buf` to start scanning from
+ *  chars         = the characters to skip; order is unimportant
+ * Returns: the index after skipping characters.
+ */
+private size_t skipChars(OutBuffer* buf, size_t i, string chars)
+{
+    Outer:
+    foreach (j, c; buf.peekSlice()[i..$])
+    {
+        foreach (d; chars)
+        {
+            if (d == c)
+                continue Outer;
+        }
+        return i + j;
+    }
+    return buf.offset;
+}
+
+unittest {
+    OutBuffer buf;
+    string data = "test ---\r\n\r\nend";
+    buf.write(data.ptr, data.length);
+
+    assert(skipChars(&buf, 0, "-") == 0);
+    assert(skipChars(&buf, 4, "-") == 4);
+    assert(skipChars(&buf, 4, " -") == 8);
+    assert(skipChars(&buf, 8, "\r\n") == 12);
+    assert(skipChars(&buf, 12, "dne") == 15);
 }
 
 /************************************************
@@ -1942,6 +2008,226 @@ private size_t skippastURL(OutBuffer* buf, size_t i)
         return i + j;
 Lno:
     return i;
+}
+
+/****************************************************
+ * Remove a previously-inserted blank line macro.
+ * Params:
+ *  buf           = an OutBuffer containing the DDoc
+ *  iAt           = the index within `buf` of the start of the `$(DDOC_BLANKLINE)`
+ *                  macro. Upon function return its value is set to `0`.
+ *  i             = an index within `buf`. If `i` is after `iAt` then it gets
+ *                  reduced by the length of the removed macro.
+ */
+private void removeBlankLineMacro(OutBuffer *buf, ref size_t iAt, ref size_t i)
+{
+    if (!iAt)
+        return;
+
+    enum macroLength = "$(DDOC_BLANKLINE)".length;
+    buf.remove(iAt, macroLength);
+    if (i > iAt)
+        i -= macroLength;
+    iAt = 0;
+}
+
+/****************************************************
+ * Detect the level of an ATX-style heading, e.g. `## This is a heading` would
+ * have a level of `2`.
+ * Params:
+ *  buf   = an OutBuffer containing the DDoc
+ *  i     = the index within `buf` of the first `#` character
+ * Returns:
+ *          the detected heading level from 1 to 6, or
+ *          0 if not at an ATX heading
+ */
+private int detectAtxHeadingLevel(OutBuffer *buf, const size_t i)
+{
+    if (!global.params.markdown)
+        return 0;
+
+    const iHeadingStart = i;
+    const iAfterHashes = skipChars(buf, i, "#");
+    const headingLevel = cast(int) (iAfterHashes - iHeadingStart);
+    if (headingLevel > 6)
+        return 0;
+
+    const iTextStart = skipChars(buf, iAfterHashes, " \t");
+    const emptyHeading = buf.data[iTextStart] == '\r' || buf.data[iTextStart] == '\n';
+
+    // require whitespace
+    if (!emptyHeading && iTextStart == iAfterHashes)
+        return 0;
+
+    return headingLevel;
+}
+
+/****************************************************
+ * Remove any trailing `##` suffix from an ATX-style heading.
+ * Params:
+ *  buf   = an OutBuffer containing the DDoc
+ *  i     = the index within `buf` to start looking for a suffix at
+ */
+private void removeAnyAtxHeadingSuffix(OutBuffer *buf, size_t i)
+{
+    size_t j = i;
+    size_t iSuffixStart = 0;
+    size_t iWhitespaceStart = j;
+    const slice = buf.peekSlice();
+    for (; j < slice.length; j++)
+    {
+        switch (slice[j])
+        {
+        case '#':
+            if (iWhitespaceStart && !iSuffixStart)
+                iSuffixStart = j;
+            continue;
+        case ' ':
+        case '\t':
+            if (!iWhitespaceStart)
+                iWhitespaceStart = j;
+            continue;
+        case '\r':
+        case '\n':
+            break;
+        default:
+            iSuffixStart = 0;
+            iWhitespaceStart = 0;
+            continue;
+        }
+        break;
+    }
+    if (iSuffixStart)
+        buf.remove(iWhitespaceStart, j - iWhitespaceStart);
+}
+
+/****************************************************
+ * Wrap text in a Markdown heading macro, e.g. `$(H2 heading text`).
+ * Params:
+ *  buf           = an OutBuffer containing the DDoc
+ *  iStart        = the index within `buf` that the Markdown heading starts at
+ *  iEnd          = the index within `buf` of the character after the last
+ *                  heading character. Is incremented by the length of the
+ *                  inserted heading macro when this function ends.
+ *  loc           = the location of the Ddoc within the file
+ *  headingLevel  = the level (1-6) of heading to end. Is set to `0` when this
+ *                  function ends.
+ */
+private void endMarkdownHeading(OutBuffer *buf, size_t iStart, ref size_t iEnd, const ref Loc loc, ref int headingLevel)
+{
+    if (!global.params.markdown)
+        return;
+    if (global.params.vmarkdown)
+    {
+        const s = buf.peekSlice()[iStart..iEnd];
+        message(loc, "Ddoc: added heading '%.*s'", s.length, s.ptr);
+    }
+
+    static char[5] heading = "$(H0 ";
+    heading[3] = cast(char) ('0' + headingLevel);
+    buf.insert(iStart, heading);
+    iEnd += 5;
+    size_t iBeforeNewline = iEnd;
+    while (buf.data[iBeforeNewline-1] == '\r' || buf.data[iBeforeNewline-1] == '\n')
+        --iBeforeNewline;
+    buf.insert(iBeforeNewline, ")");
+    headingLevel = 0;
+}
+
+/****************************************************
+ * Replace Markdown emphasis with the appropriate macro,
+ * e.g. `*very* **nice**` becomes `$(EM very) $(STRONG nice)`.
+ * Params:
+ *  buf               = an OutBuffer containing the DDoc
+ *  loc               = the current location within the file
+ *  inlineDelimiters  = the collection of delimiters found within a paragraph. When this function returns its length will be reduced to `downToLevel`.
+ *  downToLevel       = the length within `inlineDelimiters`` to reduce emphasis to
+ * Returns: the number of characters added to the buffer by the replacements
+ */
+private size_t replaceMarkdownEmphasis(OutBuffer *buf, const ref Loc loc, ref MarkdownDelimiter[] inlineDelimiters, int downToLevel = 0)
+{
+    if (!global.params.markdown)
+        return 0;
+
+    size_t replaceEmphasisPair(ref MarkdownDelimiter start, ref MarkdownDelimiter end)
+    {
+        immutable count = start.count == 1 || end.count == 1 ? 1 : 2;
+
+        size_t iStart = start.iStart;
+        size_t iEnd = end.iStart;
+        end.count -= count;
+        start.count -= count;
+        iStart += start.count;
+
+        if (!start.count)
+            start.type = 0;
+        if (!end.count)
+            end.type = 0;
+
+        if (global.params.vmarkdown)
+        {
+            const s = buf.peekSlice()[iStart + count..iEnd];
+            message(loc, "Ddoc: emphasized text '%.*s'", s.length, s.ptr);
+        }
+
+        buf.remove(iStart, count);
+        iEnd -= count;
+        buf.remove(iEnd, count);
+
+        string macroName = count >= 2 ? "$(STRONG " : "$(EM ";
+        buf.insert(iEnd, ")");
+        buf.insert(iStart, macroName);
+
+        const delta = 1 + macroName.length - (count + count);
+        end.iStart += count;
+        return delta;
+    }
+
+    size_t delta = 0;
+    int start = (cast(int) inlineDelimiters.length) - 1;
+    while (start >= downToLevel)
+    {
+        // find start emphasis
+        while (start >= downToLevel &&
+            (inlineDelimiters[start].type != '*' || !inlineDelimiters[start].leftFlanking))
+            --start;
+        if (start < downToLevel)
+            break;
+
+        // find the nearest end emphasis
+        int end = start + 1;
+        while (end < inlineDelimiters.length &&
+            (inlineDelimiters[end].type != inlineDelimiters[start].type ||
+                inlineDelimiters[end].macroLevel != inlineDelimiters[start].macroLevel ||
+                !inlineDelimiters[end].rightFlanking))
+            ++end;
+        if (end == inlineDelimiters.length)
+        {
+            // the start emphasis has no matching end; if it isn't an end itself then kill it
+            if (!inlineDelimiters[start].rightFlanking)
+                inlineDelimiters[start].type = 0;
+            --start;
+            continue;
+        }
+
+        // multiple-of-3 rule
+        if (((inlineDelimiters[start].leftFlanking && inlineDelimiters[start].rightFlanking) ||
+                (inlineDelimiters[end].leftFlanking && inlineDelimiters[end].rightFlanking)) &&
+            (inlineDelimiters[start].count + inlineDelimiters[end].count) % 3 == 0)
+        {
+            --start;
+            continue;
+        }
+
+        immutable delta0 = replaceEmphasisPair(inlineDelimiters[start], inlineDelimiters[end]);
+
+        for (; end < inlineDelimiters.length; ++end)
+            inlineDelimiters[end].iStart += delta0;
+        delta += delta0;
+    }
+
+    inlineDelimiters.length = downToLevel;
+    return delta;
 }
 
 /****************************************************
@@ -2139,18 +2425,46 @@ private bool isReservedName(const(char)[] str)
     return false;
 }
 
+/****************************************************
+ * A delimiter for Markdown inline content like emphasis and links.
+ */
+private struct MarkdownDelimiter
+{
+    size_t iStart;  /// the index where this delimiter starts
+    int count;      /// the length of this delimeter's start sequence
+    int macroLevel; /// the count of nested DDoc macros when the delimiter is started
+    bool leftFlanking;  /// whether the delimiter is left-flanking, as defined by the CommonMark spec
+    bool rightFlanking; /// whether the delimiter is right-flanking, as defined by the CommonMark spec
+    bool atParagraphStart;  /// whether the delimiter is at the start of a paragraph
+    char type;      /// the type of delimiter, defined by its starting character
+}
+
 /**************************************************
  * Highlight text section.
+ *
+ * Params:
+ *  scope = the current parse scope
+ *  a     = an array of D symbols at the current scope
+ *  loc   = source location of start of text. It is a mutable copy to allow incrementing its linenum, for printing the correct line number when an error is encountered in a multiline block of ddoc.
+ *  buf   = an OutBuffer containing the DDoc
+ *  offset = the index within buf to start highlighting
  */
-private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset)
+private void highlightText(Scope* sc, Dsymbols* a, Loc loc, OutBuffer* buf, size_t offset)
 {
-    Dsymbol s = a.dim ? (*a)[0] : null; // test
+    const incrementLoc = loc.linnum == 0 ? 1 : 0;
+    loc.linnum += incrementLoc;
+    loc.charnum = 0;
     //printf("highlightText()\n");
     int leadingBlank = 1;
+    size_t iParagraphStart = offset;
+    size_t iPrecedingBlankLine = 0;
+    int headingLevel = 0;
+    int headingMacroLevel = 0;
+    MarkdownDelimiter[] inlineDelimiters;
     int inCode = 0;
     int inBacktick = 0;
-    //int inComment = 0;                  // in <!-- ... --> comment
-    int inMacro = 0;
+    int macroLevel = 0;
+    int parenLevel = 0;
     size_t iCodeStart = 0; // start of code section
     size_t codeIndent = 0;
     size_t iLineStart = offset;
@@ -2177,13 +2491,34 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
                 // inserted lazily at the close quote, meaning the rest of the
                 // text is already OK.
             }
+            if (headingLevel)
+            {
+                i += replaceMarkdownEmphasis(buf, loc, inlineDelimiters);
+                endMarkdownHeading(buf, iParagraphStart, i, loc, headingLevel);
+                removeBlankLineMacro(buf, iPrecedingBlankLine, i);
+                ++i;
+                iParagraphStart = skipChars(buf, i, " \t\r\n");
+            }
+            iPrecedingBlankLine = 0;
             if (!inCode && i == iLineStart && i + 1 < buf.offset) // if "\n\n"
             {
-                i = buf.insert(i, "$(DDOC_BLANKLINE)");
+                i += replaceMarkdownEmphasis(buf, loc, inlineDelimiters);
+
+                // if we don't already know about this paragraph break then
+                // insert a blank line and record the paragraph break
+                if (iParagraphStart <= i)
+                {
+                    iPrecedingBlankLine = i;
+                    i = buf.insert(i, "$(DDOC_BLANKLINE)");
+                    iParagraphStart = i + 1;
+                }
             }
             leadingBlank = 1;
             iLineStart = i + 1;
+            loc.linnum += incrementLoc;
+
             break;
+
         case '<':
             {
                 leadingBlank = 0;
@@ -2244,6 +2579,7 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
                 }
                 break;
             }
+
         case '>':
             {
                 leadingBlank = 0;
@@ -2259,6 +2595,7 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
                 }
                 break;
             }
+
         case '&':
             {
                 leadingBlank = 0;
@@ -2278,6 +2615,7 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
                 }
                 break;
             }
+
         case '`':
             {
                 if (inBacktick)
@@ -2288,7 +2626,7 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
                     codebuf.write(buf.peekSlice().ptr + iCodeStart + 1, i - (iCodeStart + 1));
                     // escape the contents, but do not perform highlighting except for DDOC_PSYMBOL
                     highlightCode(sc, a, &codebuf, 0);
-                    escapeStrayParenthesis(s ? s.loc : Loc.initial, &codebuf, 0);
+                    escapeStrayParenthesis(loc, &codebuf, 0, false);
                     buf.remove(iCodeStart, i - iCodeStart + 1); // also trimming off the current `
                     immutable pre = "$(DDOC_BACKQUOTED ";
                     i = buf.insert(iCodeStart, pre);
@@ -2309,6 +2647,31 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
                 iCodeStart = i;
                 break;
             }
+
+        case '#':
+        {
+            /* A line beginning with # indicates an ATX-style heading. */
+            if (leadingBlank && !inCode)
+            {
+                leadingBlank = false;
+
+                headingLevel = detectAtxHeadingLevel(buf, i);
+                if (!headingLevel)
+                    break;
+
+                // remove the ### prefix, including whitespace
+                i = skipChars(buf, i + headingLevel, " \t");
+                buf.remove(iLineStart, i - iLineStart);
+                i = iParagraphStart = iLineStart;
+
+                removeAnyAtxHeadingSuffix(buf, i);
+                --i;
+
+                headingMacroLevel = macroLevel;
+            }
+            break;
+        }
+
         case '-':
             /* A line beginning with --- delimits a code section.
              * inCode tells us if it is start or end of a code section.
@@ -2386,7 +2749,7 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
                         ++p;
                     }
                     highlightCode2(sc, a, &codebuf, 0);
-                    escapeStrayParenthesis(s ? s.loc : Loc.initial, &codebuf, 0);
+                    escapeStrayParenthesis(loc, &codebuf, 0, false);
                     buf.remove(iCodeStart, i - iCodeStart);
                     i = buf.insert(iCodeStart, codebuf.peekSlice());
                     i = buf.insert(i, ")\n");
@@ -2405,6 +2768,60 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
             }
             break;
 
+        case '*':
+        {
+            if (inCode || inBacktick || !global.params.markdown)
+                break;
+
+            // Markdown emphasis
+            const leftC = i > offset ? buf.data[i-1] : '\0';
+            size_t iAfterEmphasis = skipChars(buf, i+1, "*");
+            const rightC = iAfterEmphasis < buf.offset ? buf.data[iAfterEmphasis] : '\0';
+            int count = cast(int) (iAfterEmphasis - i);
+            const leftFlanking = (rightC != '\0' && !isspace(rightC)) && (!ispunct(rightC) || leftC == '\0' || isspace(leftC) || ispunct(leftC));
+            const rightFlanking = (leftC != '\0' && !isspace(leftC)) && (!ispunct(leftC) || rightC == '\0' || isspace(rightC) || ispunct(rightC));
+            auto emphasis = MarkdownDelimiter(i, count, macroLevel, leftFlanking, rightFlanking, false, c);
+
+            if (!emphasis.leftFlanking && !emphasis.rightFlanking)
+            {
+                i = iAfterEmphasis - 1;
+                break;
+            }
+
+            inlineDelimiters ~= emphasis;
+            i += emphasis.count;
+            --i;
+            break;
+        }
+
+        case '\\':
+        {
+            leadingBlank = false;
+            if (inCode || i+1 >= buf.offset || !global.params.markdown)
+                break;
+
+            /* Escape Markdown special characters */
+            char c1 = buf.data[i+1];
+            if (ispunct(c1))
+            {
+                if (global.params.vmarkdown)
+                    message(loc, "Ddoc: backslash-escaped %c", c1);
+
+                buf.remove(i, 1);
+
+                auto se = sc._module.escapetable.escapeChar(c1);
+                if (!se)
+                    se = c1 == '$' ? "$(DOLLAR)" : c1 == ',' ? "$(COMMA)" : null;
+                if (se)
+                {
+                    buf.remove(i, 1);
+                    i = buf.insert(i, se);
+                    i--; // point to escaped char
+                }
+            }
+            break;
+        }
+
         case '$':
         {
             /* Look for the start of a macro, '$(Identifier'
@@ -2415,7 +2832,14 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
             const slice = buf.peekSlice();
             auto p = &slice[i];
             if (p[1] == '(' && isIdStart(&p[2]))
-                ++inMacro;
+                ++macroLevel;
+            break;
+        }
+
+        case '(':
+        {
+            if (!inCode && i > offset && buf.data[i-1] != '$')
+                ++parenLevel;
             break;
         }
 
@@ -2425,8 +2849,22 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
             leadingBlank = 0;
             if (inCode || inBacktick)
                 break;
-            if (inMacro)
-                --inMacro;
+            if (parenLevel > 0)
+                --parenLevel;
+            else if (macroLevel)
+            {
+                int downToLevel = cast(int) inlineDelimiters.length;
+                while (downToLevel > 0 && inlineDelimiters[downToLevel - 1].macroLevel >= macroLevel)
+                    --downToLevel;
+                i += replaceMarkdownEmphasis(buf, loc, inlineDelimiters, downToLevel);
+                if (headingLevel && headingMacroLevel >= macroLevel)
+                {
+                    endMarkdownHeading(buf, iParagraphStart, i, loc, headingLevel);
+                    removeBlankLineMacro(buf, iPrecedingBlankLine, i);
+                }
+
+                --macroLevel;
+            }
             break;
         }
 
@@ -2445,7 +2883,7 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
                     {
                         /* The URL is buf[i..k]
                          */
-                        if (inMacro)
+                        if (macroLevel)
                             /* Leave alone if already in a macro
                              */
                             i = k - 1;
@@ -2490,7 +2928,15 @@ private void highlightText(Scope* sc, Dsymbols* a, OutBuffer* buf, size_t offset
         }
     }
     if (inCode)
-        error(s ? s.loc : Loc.initial, "unmatched `---` in DDoc comment");
+        error(loc, "unmatched `---` in DDoc comment");
+
+    size_t i = buf.offset;
+    i += replaceMarkdownEmphasis(buf, loc, inlineDelimiters);
+    if (headingLevel)
+    {
+        endMarkdownHeading(buf, iParagraphStart, i, loc, headingLevel);
+        removeBlankLineMacro(buf, iPrecedingBlankLine, i);
+    }
 }
 
 /**************************************************

@@ -853,7 +853,7 @@ extern (C++) class ConditionalDeclaration : AttribDeclaration
     override final bool oneMember(Dsymbol* ps, Identifier ident)
     {
         //printf("ConditionalDeclaration::oneMember(), inc = %d\n", condition.inc);
-        if (condition.inc)
+        if (condition.inc != Include.notComputed)
         {
             Dsymbols* d = condition.include(null) ? decl : elsedecl;
             return Dsymbol.oneMembers(d, ps, ident);
@@ -957,7 +957,7 @@ extern (C++) final class StaticIfDeclaration : ConditionalDeclaration
         onStack = true;
         scope(exit) onStack = false;
 
-        if (sc && condition.inc == 0)
+        if (sc && condition.inc == Include.notComputed)
         {
             assert(scopesym); // addMember is already done
             assert(_scope); // setScope is already done
@@ -1219,25 +1219,26 @@ extern(C++) final class ForwardingAttribDeclaration: AttribDeclaration
 /***********************************************************
  * Mixin declarations, like:
  *      mixin("int x");
+ * https://dlang.org/spec/module.html#mixin-declaration
  */
 extern (C++) final class CompileDeclaration : AttribDeclaration
 {
-    Expression exp;
+    Expressions* exps;
     ScopeDsymbol scopesym;
     bool compiled;
 
-    extern (D) this(const ref Loc loc, Expression exp)
+    extern (D) this(const ref Loc loc, Expressions* exps)
     {
         super(null);
         //printf("CompileDeclaration(loc = %d)\n", loc.linnum);
         this.loc = loc;
-        this.exp = exp;
+        this.exps = exps;
     }
 
     override Dsymbol syntaxCopy(Dsymbol s)
     {
         //printf("CompileDeclaration::syntaxCopy('%s')\n", toChars());
-        return new CompileDeclaration(loc, exp.syntaxCopy());
+        return new CompileDeclaration(loc, Expression.arraySyntaxCopy(exps));
     }
 
     override void addMember(Scope* sc, ScopeDsymbol sds)

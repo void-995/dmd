@@ -285,6 +285,7 @@ enum ENUMTY : int
     Tvector,
     Tint128,
     Tuns128,
+    TTraits,
     TMAX,
 }
 
@@ -332,6 +333,7 @@ alias Tnull = ENUMTY.Tnull;
 alias Tvector = ENUMTY.Tvector;
 alias Tint128 = ENUMTY.Tint128;
 alias Tuns128 = ENUMTY.Tuns128;
+alias Ttraits = ENUMTY.TTraits;
 alias TMAX = ENUMTY.TMAX;
 
 alias TY = ubyte;
@@ -472,6 +474,7 @@ extern (C++) abstract class Type : RootObject
             sizeTy[Terror] = __traits(classInstanceSize, TypeError);
             sizeTy[Tnull] = __traits(classInstanceSize, TypeNull);
             sizeTy[Tvector] = __traits(classInstanceSize, TypeVector);
+            sizeTy[Ttraits] = __traits(classInstanceSize, TypeTraits);
             return sizeTy;
         }();
 
@@ -571,14 +574,14 @@ extern (C++) abstract class Type : RootObject
 
         if (t1.parameters && t2.parameters)
         {
-            size_t dim = Parameter.dim(t1.parameters);
-            if (dim != Parameter.dim(t2.parameters))
+            size_t dim = t1.parameterList.length;
+            if (dim != t2.parameterList.length)
                 goto Ldistinct;
 
             for (size_t i = 0; i < dim; i++)
             {
-                Parameter fparam1 = Parameter.getNth(t1.parameters, i);
-                Parameter fparam2 = Parameter.getNth(t2.parameters, i);
+                Parameter fparam1 = t1.parameterList[i];
+                Parameter fparam2 = t2.parameterList[i];
 
                 if (!fparam1.type.equals(fparam2.type))
                 {
@@ -622,9 +625,7 @@ extern (C++) abstract class Type : RootObject
         }
         else if (t1.parameters != t2.parameters)
         {
-            size_t dim1 = !t1.parameters ? 0 : t1.parameters.dim;
-            size_t dim2 = !t2.parameters ? 0 : t2.parameters.dim;
-            if (dim1 || dim2)
+            if (t1.parameterList.length || t1.parameterList.length)
                 goto Ldistinct;
         }
 
@@ -2420,72 +2421,6 @@ extern (C++) abstract class Type : RootObject
     }
 
     /***************************************
-     * Normalize `e` as the result of Type.resolve() process.
-     */
-    final void resolveExp(Expression e, Type *pt, Expression *pe, Dsymbol* ps)
-    {
-        *pt = null;
-        *pe = null;
-        *ps = null;
-
-        Dsymbol s;
-        switch (e.op)
-        {
-            case TOK.error:
-                *pt = Type.terror;
-                return;
-
-            case TOK.type:
-                *pt = e.type;
-                return;
-
-            case TOK.variable:
-                s = (cast(VarExp)e).var;
-                if (s.isVarDeclaration())
-                    goto default;
-                //if (s.isOverDeclaration())
-                //    todo;
-                break;
-
-            case TOK.template_:
-                // TemplateDeclaration
-                s = (cast(TemplateExp)e).td;
-                break;
-
-            case TOK.scope_:
-                s = (cast(ScopeExp)e).sds;
-                // TemplateDeclaration, TemplateInstance, Import, Package, Module
-                break;
-
-            case TOK.function_:
-                s = getDsymbol(e);
-                break;
-
-            case TOK.dotTemplateDeclaration:
-                s = (cast(DotTemplateExp)e).td;
-                break;
-
-            //case TOK.this_:
-            //case TOK.super_:
-
-            //case TOK.tuple:
-
-            //case TOK.overloadSet:
-
-            //case TOK.dotVariable:
-            //case TOK.dotTemplateInstance:
-            //case TOK.dotType:
-            //case TOK.dotIdentifier:
-
-            default:
-                *pe = e;
-                return;
-        }
-
-        *ps = s;
-    }
-
-    /***************************************
      * Return !=0 if the type or any of its subtypes is wild.
      */
     int hasWild() const
@@ -2679,6 +2614,29 @@ extern (C++) abstract class Type : RootObject
     TypeBasic isTypeBasic()
     {
         return null;
+    }
+
+    final pure inout nothrow @nogc
+    {
+        inout(TypeError)      isTypeError()      { return ty == Terror     ? cast(typeof(return))this : null; }
+        inout(TypeVector)     isTypeVector()     { return ty == Tvector    ? cast(typeof(return))this : null; }
+        inout(TypeSArray)     isTypeSArray()     { return ty == Tsarray    ? cast(typeof(return))this : null; }
+        inout(TypeDArray)     isTypeDArray()     { return ty == Tarray     ? cast(typeof(return))this : null; }
+        inout(TypeAArray)     isTypeAArray()     { return ty == Taarray    ? cast(typeof(return))this : null; }
+        inout(TypePointer)    isTypePointer()    { return ty == Tpointer   ? cast(typeof(return))this : null; }
+        inout(TypeReference)  isTypeReference()  { return ty == Treference ? cast(typeof(return))this : null; }
+        inout(TypeFunction)   isTypeFunction()   { return ty == Tfunction  ? cast(typeof(return))this : null; }
+        inout(TypeDelegate)   isTypeDelegate()   { return ty == Tdelegate  ? cast(typeof(return))this : null; }
+        inout(TypeIdentifier) isTypeIdentifier() { return ty == Tident     ? cast(typeof(return))this : null; }
+        inout(TypeInstance)   isTypeInstance()   { return ty == Tinstance  ? cast(typeof(return))this : null; }
+        inout(TypeTypeof)     isTypeTypeof()     { return ty == Ttypeof    ? cast(typeof(return))this : null; }
+        inout(TypeReturn)     isTypeReturn()     { return ty == Treturn    ? cast(typeof(return))this : null; }
+        inout(TypeStruct)     isTypeStruct()     { return ty == Tstruct    ? cast(typeof(return))this : null; }
+        inout(TypeEnum)       isTypeEnum()       { return ty == Tenum      ? cast(typeof(return))this : null; }
+        inout(TypeClass)      isTypeClass()      { return ty == Tclass     ? cast(typeof(return))this : null; }
+        inout(TypeTuple)      isTypeTuple()      { return ty == Ttuple     ? cast(typeof(return))this : null; }
+        inout(TypeSlice)      isTypeSlice()      { return ty == Tslice     ? cast(typeof(return))this : null; }
+        inout(TypeNull)       isTypeNull()       { return ty == Tnull      ? cast(typeof(return))this : null; }
     }
 
     void accept(Visitor v)
@@ -3323,12 +3281,14 @@ extern (C++) final class TypeBasic : Type
             TypeVector tv = cast(TypeVector)to;
             tob = tv.elementType();
         }
-        else if (to.ty == Tenum)
+        else if (auto te = to.isTypeEnum())
         {
-            EnumDeclaration ed = (cast(TypeEnum)to).sym;
+            EnumDeclaration ed = te.sym;
             if (ed.isSpecial())
             {
-                /* Special enums that allow implicit conversions to them.  */
+                /* Special enums that allow implicit conversions to them
+                 * with a MATCH.convert
+                 */
                 tob = to.toBasetype().isTypeBasic();
                 if (tob)
                     return implicitConvTo(tob);
@@ -3530,7 +3490,7 @@ extern (C++) final class TypeVector : Type
 
 /***********************************************************
  */
-extern (C++) class TypeArray : TypeNext
+extern (C++) abstract class TypeArray : TypeNext
 {
     final extern (D) this(TY ty, Type next)
     {
@@ -3610,9 +3570,8 @@ extern (C++) final class TypeSArray : TypeArray
 
     override MATCH constConv(Type to)
     {
-        if (to.ty == Tsarray)
+        if (auto tsa = to.isTypeSArray())
         {
-            TypeSArray tsa = cast(TypeSArray)to;
             if (!dim.equals(tsa.dim))
                 return MATCH.nomatch;
         }
@@ -3622,9 +3581,8 @@ extern (C++) final class TypeSArray : TypeArray
     override MATCH implicitConvTo(Type to)
     {
         //printf("TypeSArray::implicitConvTo(to = %s) this = %s\n", to.toChars(), toChars());
-        if (to.ty == Tarray)
+        if (auto ta = to.isTypeDArray())
         {
-            TypeDArray ta = cast(TypeDArray)to;
             if (!MODimplicitConv(next.mod, ta.next.mod))
                 return MATCH.nomatch;
 
@@ -3642,12 +3600,11 @@ extern (C++) final class TypeSArray : TypeArray
             }
             return MATCH.nomatch;
         }
-        if (to.ty == Tsarray)
+        if (auto tsa = to.isTypeSArray())
         {
             if (this == to)
                 return MATCH.exact;
 
-            TypeSArray tsa = cast(TypeSArray)to;
             if (dim.equals(tsa.dim))
             {
                 /* Since static arrays are value types, allow
@@ -3787,10 +3744,8 @@ extern (C++) final class TypeDArray : TypeArray
         if (equals(to))
             return MATCH.exact;
 
-        if (to.ty == Tarray)
+        if (auto ta = to.isTypeDArray())
         {
-            TypeDArray ta = cast(TypeDArray)to;
-
             if (!MODimplicitConv(next.mod, ta.next.mod))
                 return MATCH.nomatch; // not const-compatible
 
@@ -3887,10 +3842,8 @@ extern (C++) final class TypeAArray : TypeArray
         if (equals(to))
             return MATCH.exact;
 
-        if (to.ty == Taarray)
+        if (auto ta = to.isTypeAArray())
         {
-            TypeAArray ta = cast(TypeAArray)to;
-
             if (!MODimplicitConv(next.mod, ta.next.mod))
                 return MATCH.nomatch; // not const-compatible
 
@@ -3909,9 +3862,8 @@ extern (C++) final class TypeAArray : TypeArray
 
     override MATCH constConv(Type to)
     {
-        if (to.ty == Taarray)
+        if (auto taa = to.isTypeAArray())
         {
-            TypeAArray taa = cast(TypeAArray)to;
             MATCH mindex = index.constConv(taa.index);
             MATCH mkey = next.constConv(taa.next);
             // Pick the worst match
@@ -3971,9 +3923,8 @@ extern (C++) final class TypePointer : TypeNext
 
         if (next.ty == Tfunction)
         {
-            if (to.ty == Tpointer)
+            if (auto tp = to.isTypePointer())
             {
-                TypePointer tp = cast(TypePointer)to;
                 if (tp.next.ty == Tfunction)
                 {
                     if (next.equals(tp.next))
@@ -4006,9 +3957,8 @@ extern (C++) final class TypePointer : TypeNext
             }
             return MATCH.nomatch;
         }
-        else if (to.ty == Tpointer)
+        else if (auto tp = to.isTypePointer())
         {
-            TypePointer tp = cast(TypePointer)to;
             assert(tp.next);
 
             if (!MODimplicitConv(next.mod, tp.next.mod))
@@ -4147,7 +4097,9 @@ extern (C++) final class TypeFunction : TypeNext
 {
     // .next is the return type
 
-    Parameters* parameters;     // function parameters
+    ParameterList parameterList;   // function parameters
+    alias parameters = parameterList;
+
     int varargs;                // 1: T t, ...) style for variable number of arguments
                                 // 2: T t ...) style for variable number of arguments
     bool isnothrow;             // true: nothrow
@@ -4170,7 +4122,7 @@ extern (C++) final class TypeFunction : TypeNext
         //if (!treturn) *(char*)0=0;
         //    assert(treturn);
         assert(0 <= varargs && varargs <= 2);
-        this.parameters = parameters;
+        this.parameterList.parameters = parameters;
         this.varargs = varargs;
         this.linkage = linkage;
 
@@ -4214,7 +4166,7 @@ extern (C++) final class TypeFunction : TypeNext
     override Type syntaxCopy()
     {
         Type treturn = next ? next.syntaxCopy() : null;
-        Parameters* params = Parameter.arraySyntaxCopy(parameters);
+        Parameters* params = Parameter.arraySyntaxCopy(parameterList.parameters);
         auto t = new TypeFunction(params, treturn, varargs, linkage);
         t.mod = mod;
         t.isnothrow = isnothrow;
@@ -4288,10 +4240,10 @@ extern (C++) final class TypeFunction : TypeNext
 
         /* Evaluate what kind of purity based on the modifiers for the parameters
          */
-        const dim = Parameter.dim(tf.parameters);
+        const dim = tf.parameterList.length;
     Lloop: foreach (i; 0 .. dim)
         {
-            Parameter fparam = Parameter.getNth(tf.parameters, i);
+            Parameter fparam = tf.parameterList[i];
             Type t = fparam.type;
             if (!t)
                 continue;
@@ -4336,10 +4288,10 @@ extern (C++) final class TypeFunction : TypeNext
      */
     bool hasLazyParameters()
     {
-        size_t dim = Parameter.dim(parameters);
+        size_t dim = parameterList.length;
         for (size_t i = 0; i < dim; i++)
         {
-            Parameter fparam = Parameter.getNth(parameters, i);
+            Parameter fparam = parameterList[i];
             if (fparam.storageClass & STC.lazy_)
                 return true;
         }
@@ -4401,10 +4353,10 @@ extern (C++) final class TypeFunction : TypeNext
         if (purity == PURE.weak)
         {
             // Check escaping through parameters
-            const dim = Parameter.dim(parameters);
+            const dim = parameterList.length;
             foreach (const i; 0 .. dim)
             {
-                Parameter fparam = Parameter.getNth(parameters, i);
+                Parameter fparam = parameterList[i];
                 if (fparam == p)
                     continue;
                 Type t = fparam.type;
@@ -4431,10 +4383,10 @@ extern (C++) final class TypeFunction : TypeNext
             {
                 auto tb = tthis.toBasetype();
                 AggregateDeclaration ad;
-                if (tb.ty == Tclass)
-                    ad = (cast(TypeClass)tb).sym;
-                else if (tb.ty == Tstruct)
-                    ad = (cast(TypeStruct)tb).sym;
+                if (auto tc = tb.isTypeClass())
+                    ad = tc.sym;
+                else if (auto ts = tb.isTypeStruct())
+                    ad = ts.sym;
                 else
                     assert(0);
                 foreach (VarDeclaration v; ad.fields)
@@ -4577,6 +4529,15 @@ extern (C++) final class TypeFunction : TypeNext
         return buf.extractString();
     }
 
+    private extern(D) const(char)* getMatchError(A...)(const(char)* format, A args)
+    {
+        if (global.gag && !global.params.showGaggedErrors)
+            return null;
+        OutBuffer buf;
+        buf.printf(format, args);
+        return buf.extractString();
+    }
+
     /********************************
      * 'args' are being matched to function 'this'
      * Determine match level.
@@ -4621,15 +4582,17 @@ extern (C++) final class TypeFunction : TypeNext
             }
         }
 
-        size_t nparams = Parameter.dim(parameters);
+        size_t nparams = parameterList.length;
         size_t nargs = args ? args.dim : 0;
-        if (nparams == nargs)
-        {
-        }
-        else if (nargs > nparams)
+        if (nargs > nparams)
         {
             if (varargs == 0)
-                goto Nomatch;
+            {
+                // suppress early exit if an error message is wanted,
+                // so we can check any matching args are valid
+                if (!pMessage)
+                    goto Nomatch;
+            }
             // too many args; no match
             match = MATCH.convert; // match ... with a "conversion" match level
         }
@@ -4638,7 +4601,7 @@ extern (C++) final class TypeFunction : TypeNext
         {
             if (u >= nparams)
                 break;
-            Parameter p = Parameter.getNth(parameters, u);
+            Parameter p = parameterList[u];
             Expression arg = (*args)[u];
             assert(arg);
             Type tprm = p.type;
@@ -4671,14 +4634,14 @@ extern (C++) final class TypeFunction : TypeNext
         {
             MATCH m;
 
-            Parameter p = Parameter.getNth(parameters, u);
+            Parameter p = parameterList[u];
             assert(p);
             if (u >= nargs)
             {
                 if (p.defaultArg)
                     continue;
-                goto L1;
                 // try typesafe variadics
+                goto L1;
             }
             {
                 Expression arg = (*args)[u];
@@ -4796,7 +4759,19 @@ extern (C++) final class TypeFunction : TypeNext
                         tsa = cast(TypeSArray)tb;
                         sz = tsa.dim.toInteger();
                         if (sz != nargs - u)
+                        {
+                            if (pMessage)
+                                // Windows (Vista) OutBuffer.vprintf issue? 2nd argument always zero
+                                //*pMessage = getMatchError("expected %d variadic argument(s), not %d", sz, nargs - u);
+                            if (!global.gag || global.params.showGaggedErrors)
+                            {
+                                OutBuffer buf;
+                                buf.printf("expected %d variadic argument(s)", sz);
+                                buf.printf(", not %d", nargs - u);
+                                *pMessage = buf.extractString();
+                            }
                             goto Nomatch;
+                        }
                         goto case Tarray;
                     case Tarray:
                         {
@@ -4847,6 +4822,9 @@ extern (C++) final class TypeFunction : TypeNext
                 }
                 if (pMessage && u < nargs)
                     *pMessage = getParamError((*args)[u], p);
+                else if (pMessage)
+                    *pMessage = getMatchError("missing argument for parameter #%d: `%s`",
+                        u + 1, parameterToChars(p, this, false));
                 goto Nomatch;
             }
             if (m < match)
@@ -4854,6 +4832,12 @@ extern (C++) final class TypeFunction : TypeNext
         }
 
     Ldone:
+        if (pMessage && !varargs && nargs > nparams)
+        {
+            // all parameters had a match, but there are surplus args
+            *pMessage = getMatchError("expected %d argument(s), not %d", nparams, nargs);
+            goto Nomatch;
+        }
         //printf("match = %d\n", match);
         return match;
 
@@ -4877,11 +4861,13 @@ extern (C++) final class TypeFunction : TypeNext
         }
         if (!isref && (tb.ty == Tstruct || tb.ty == Tsarray))
         {
-            Type tb2 = tb.baseElemOf();
-            if (tb2.ty == Tstruct && !(cast(TypeStruct)tb2).sym.members)
+            if (auto ts = tb.baseElemOf().isTypeStruct())
             {
-                error(loc, "functions cannot return opaque type `%s` by value", tb.toChars());
-                next = Type.terror;
+                if (!ts.sym.members)
+                {
+                    error(loc, "functions cannot return opaque type `%s` by value", tb.toChars());
+                    next = Type.terror;
+                }
             }
         }
         if (tb.ty == Terror)
@@ -5014,6 +5000,48 @@ extern (C++) final class TypeDelegate : TypeNext
     override void accept(Visitor v)
     {
         v.visit(this);
+    }
+}
+
+/**
+ * This is a shell containing a TraitsExp that can be
+ * either resolved to a type or to a symbol.
+ *
+ * The point is to allow AliasDeclarationY to use `__traits()`, see issue 7804.
+ */
+extern (C++) final class TypeTraits : Type
+{
+    Loc loc;
+    /// The expression to resolve as type or symbol.
+    TraitsExp exp;
+    /// After `typeSemantic` the symbol when `exp` doesn't represent a type.
+    Dsymbol sym;
+    /// Indicates wether we are in an alias or not.
+    bool inAliasDeclaration;
+
+    final extern (D) this(const ref Loc loc, TraitsExp exp)
+    {
+        super(Ttraits);
+        this.loc = loc;
+        this.exp = exp;
+    }
+
+    override Type syntaxCopy()
+    {
+        TraitsExp te = cast(TraitsExp) exp.syntaxCopy();
+        TypeTraits tt = new TypeTraits(loc, te);
+        tt.mod = mod;
+        return tt;
+    }
+
+    override void accept(Visitor v)
+    {
+        v.visit(this);
+    }
+
+    override d_uns64 size(const ref Loc loc)
+    {
+        return SIZE_INVALID;
     }
 }
 
@@ -5466,7 +5494,9 @@ extern (C++) final class TypeStruct : Type
         // Probably should cache this information in sym rather than recompute
         StructDeclaration s = sym;
 
-        sym.size(Loc.initial); // give error for forward references
+        if (sym.members && !sym.determineFields() && sym.type != Type.terror)
+            error(sym.loc, "no size because of forward references");
+
         foreach (VarDeclaration v; s.fields)
         {
             if (v.storage_class & STC.ref_ || v.hasPointers())
@@ -5491,11 +5521,10 @@ extern (C++) final class TypeStruct : Type
         return false;
     }
 
-    override MATCH implicitConvTo(Type to)
+    MATCH implicitConvToWithoutAliasThis(Type to)
     {
         MATCH m;
 
-        //printf("TypeStruct::implicitConvTo(%s => %s)\n", toChars(), to.toChars());
         if (ty == to.ty && sym == (cast(TypeStruct)to).sym)
         {
             m = MATCH.exact; // exact match
@@ -5547,7 +5576,13 @@ extern (C++) final class TypeStruct : Type
                 }
             }
         }
-        else if (sym.aliasthis && !(att & AliasThisRec.tracing))
+        return m;
+    }
+
+    MATCH implicitConvToThroughAliasThis(Type to)
+    {
+        MATCH m;
+        if (!(ty == to.ty && sym == (cast(TypeStruct)to).sym) && sym.aliasthis && !(att & AliasThisRec.tracing))
         {
             if (auto ato = aliasthisOf())
             {
@@ -5558,9 +5593,14 @@ extern (C++) final class TypeStruct : Type
             else
                 m = MATCH.nomatch; // no match
         }
-        else
-            m = MATCH.nomatch; // no match
         return m;
+    }
+
+    override MATCH implicitConvTo(Type to)
+    {
+        //printf("TypeStruct::implicitConvTo(%s => %s)\n", toChars(), to.toChars());
+        MATCH m = implicitConvToWithoutAliasThis(to);
+        return m ? m : implicitConvToThroughAliasThis(to);
     }
 
     override MATCH constConv(Type to)
@@ -5630,9 +5670,13 @@ extern (C++) final class TypeEnum : Type
         return sym.getMemtype(loc).size(loc);
     }
 
+    Type memType(const ref Loc loc = Loc.initial)
+    {
+        return sym.getMemtype(loc);
+    }
     override uint alignsize()
     {
-        Type t = sym.getMemtype(Loc.initial);
+        Type t = memType();
         if (t.ty == Terror)
             return 4;
         return t.alignsize();
@@ -5645,62 +5689,62 @@ extern (C++) final class TypeEnum : Type
 
     override bool isintegral()
     {
-        return sym.getMemtype(Loc.initial).isintegral();
+        return memType().isintegral();
     }
 
     override bool isfloating()
     {
-        return sym.getMemtype(Loc.initial).isfloating();
+        return memType().isfloating();
     }
 
     override bool isreal()
     {
-        return sym.getMemtype(Loc.initial).isreal();
+        return memType().isreal();
     }
 
     override bool isimaginary()
     {
-        return sym.getMemtype(Loc.initial).isimaginary();
+        return memType().isimaginary();
     }
 
     override bool iscomplex()
     {
-        return sym.getMemtype(Loc.initial).iscomplex();
+        return memType().iscomplex();
     }
 
     override bool isscalar()
     {
-        return sym.getMemtype(Loc.initial).isscalar();
+        return memType().isscalar();
     }
 
     override bool isunsigned()
     {
-        return sym.getMemtype(Loc.initial).isunsigned();
+        return memType().isunsigned();
     }
 
     override bool isBoolean()
     {
-        return sym.getMemtype(Loc.initial).isBoolean();
+        return memType().isBoolean();
     }
 
     override bool isString()
     {
-        return sym.getMemtype(Loc.initial).isString();
+        return memType().isString();
     }
 
     override bool isAssignable()
     {
-        return sym.getMemtype(Loc.initial).isAssignable();
+        return memType().isAssignable();
     }
 
     override bool needsDestruction()
     {
-        return sym.getMemtype(Loc.initial).needsDestruction();
+        return memType().needsDestruction();
     }
 
     override bool needsNested()
     {
-        return sym.getMemtype(Loc.initial).needsNested();
+        return memType().needsNested();
     }
 
     override MATCH implicitConvTo(Type to)
@@ -5740,17 +5784,17 @@ extern (C++) final class TypeEnum : Type
 
     override bool hasPointers()
     {
-        return sym.getMemtype(Loc.initial).hasPointers();
+        return memType().hasPointers();
     }
 
     override bool hasVoidInitPointers()
     {
-        return sym.getMemtype(Loc.initial).hasVoidInitPointers();
+        return memType().hasVoidInitPointers();
     }
 
     override Type nextOf()
     {
-        return sym.getMemtype(Loc.initial).nextOf();
+        return memType().nextOf();
     }
 
     override void accept(Visitor v)
@@ -5809,9 +5853,8 @@ extern (C++) final class TypeClass : Type
         return false;
     }
 
-    override MATCH implicitConvTo(Type to)
+    MATCH implicitConvToWithoutAliasThis(Type to)
     {
-        //printf("TypeClass::implicitConvTo(to = '%s') %s\n", to.toChars(), toChars());
         MATCH m = constConv(to);
         if (m > MATCH.nomatch)
             return m;
@@ -5830,8 +5873,12 @@ extern (C++) final class TypeClass : Type
                 return MATCH.convert;
             }
         }
+        return MATCH.nomatch;
+    }
 
-        m = MATCH.nomatch;
+    MATCH implicitConvToThroughAliasThis(Type to)
+    {
+        MATCH m;
         if (sym.aliasthis && !(att & AliasThisRec.tracing))
         {
             if (auto ato = aliasthisOf())
@@ -5841,8 +5888,14 @@ extern (C++) final class TypeClass : Type
                 att = cast(AliasThisRec)(att & ~AliasThisRec.tracing);
             }
         }
-
         return m;
+    }
+
+    override MATCH implicitConvTo(Type to)
+    {
+        //printf("TypeClass::implicitConvTo(to = '%s') %s\n", to.toChars(), toChars());
+        MATCH m = implicitConvToWithoutAliasThis(to);
+        return m ? m : implicitConvToThroughAliasThis(to);
     }
 
     override MATCH constConv(Type to)
@@ -6016,9 +6069,8 @@ extern (C++) final class TypeTuple : Type
         //printf("TypeTuple::equals(%s, %s)\n", toChars(), t.toChars());
         if (this == t)
             return true;
-        if (t.ty == Ttuple)
+        if (auto tt = t.isTypeTuple())
         {
-            TypeTuple tt = cast(TypeTuple)t;
             if (arguments.dim == tt.arguments.dim)
             {
                 for (size_t i = 0; i < tt.arguments.dim; i++)
@@ -6132,6 +6184,27 @@ extern (C++) final class TypeNull : Type
 }
 
 /***********************************************************
+ * Encapsulate Parameters* so .length and [i] can be used on it.
+ */
+struct ParameterList
+{
+    Parameters* parameters;
+
+    size_t length()
+    {
+        return Parameter.dim(parameters);
+    }
+
+    Parameter opIndex(size_t i)
+    {
+        return Parameter.getNth(parameters, i);
+    }
+
+    alias parameters this;
+}
+
+
+/***********************************************************
  */
 extern (C++) final class Parameter : RootObject
 {
@@ -6177,9 +6250,8 @@ extern (C++) final class Parameter : RootObject
         if (tb.ty == Tsarray || tb.ty == Tarray)
         {
             Type tel = (cast(TypeArray)tb).next.toBasetype();
-            if (tel.ty == Tdelegate)
+            if (auto td = tel.isTypeDelegate())
             {
-                TypeDelegate td = cast(TypeDelegate)tel;
                 TypeFunction tf = td.next.toTypeFunction();
                 if (!tf.varargs && Parameter.dim(tf.parameters) == 0)
                 {
@@ -6277,9 +6349,8 @@ extern (C++) final class Parameter : RootObject
             Parameter p = (*parameters)[i];
             Type t = p.type.toBasetype();
 
-            if (t.ty == Ttuple)
+            if (auto tu = t.isTypeTuple())
             {
-                TypeTuple tu = cast(TypeTuple)t;
                 result = _foreach(tu.arguments, dg, &n);
             }
             else

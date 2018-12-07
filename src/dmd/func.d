@@ -98,8 +98,17 @@ public:
     {
         DtorExpStatement des;
         if (fd.nrvo_can && s.finalbody && (des = s.finalbody.isDtorExpStatement()) !is null &&
-            fd.nrvo_var == des.var && global.params.useExceptions && ClassDeclaration.throwable)
+            fd.nrvo_var == des.var)
         {
+            if (!(global.params.useExceptions && ClassDeclaration.throwable))
+            {
+                /* Don't need to call destructor at all, since it is nrvo
+                 */
+                replaceCurrent(s._body);
+                s._body.accept(this);
+                return;
+            }
+
             /* Normally local variable dtors are called regardless exceptions.
              * But for nrvo_var, its dtor should be called only when exception is thrown.
              *
@@ -467,8 +476,8 @@ extern (C++) class FuncDeclaration : Declaration
              * enclosing function's stack frame.
              * Note that nested functions and member functions are disjoint.
              */
-            VarDeclaration v = new ThisDeclaration(loc, Type.tvoid.pointerTo());
-            v.storage_class |= STC.parameter;
+            VarDeclaration v = new VarDeclaration(loc, Type.tvoid.pointerTo(), Id.capture, null);
+            v.storage_class |= STC.parameter | STC.nodtor;
             if (type.ty == Tfunction)
             {
                 TypeFunction tf = cast(TypeFunction)type;
@@ -924,7 +933,7 @@ extern (C++) class FuncDeclaration : Declaration
 
         TypeFunction tf = type.toTypeFunction();
         TypeFunction tg = g.type.toTypeFunction();
-        size_t nfparams = Parameter.dim(tf.parameters);
+        size_t nfparams = tf.parameterList.length;
 
         /* If both functions have a 'this' pointer, and the mods are not
          * the same and g's is not const, then this is less specialized.
@@ -948,7 +957,7 @@ extern (C++) class FuncDeclaration : Declaration
         Expressions args = Expressions(nfparams);
         for (size_t u = 0; u < nfparams; u++)
         {
-            Parameter p = Parameter.getNth(tf.parameters, u);
+            Parameter p = tf.parameterList[u];
             Expression e;
             if (p.storageClass & (STC.ref_ | STC.out_))
             {
@@ -1457,10 +1466,10 @@ extern (C++) class FuncDeclaration : Declaration
 
         //printf("isTypeIsolatedIndirect(%s) t = %s\n", tf.toChars(), t.toChars());
 
-        size_t dim = Parameter.dim(tf.parameters);
+        size_t dim = tf.parameterList.length;
         for (size_t i = 0; i < dim; i++)
         {
-            Parameter fparam = Parameter.getNth(tf.parameters, i);
+            Parameter fparam = tf.parameterList[i];
             Type tp = fparam.type;
             if (!tp)
                 continue;
@@ -1620,14 +1629,14 @@ extern (C++) class FuncDeclaration : Declaration
     {
         auto ad = isThis();
         ClassDeclaration cd = ad ? ad.isClassDeclaration() : null;
-        return (ad && !(cd && cd.isCPPclass()) && global.params.useInvariants && (protection.kind == Prot.Kind.protected_ || protection.kind == Prot.Kind.public_ || protection.kind == Prot.Kind.export_) && !naked);
+        return (ad && !(cd && cd.isCPPclass()) && global.params.useInvariants == CHECKENABLE.on && (protection.kind == Prot.Kind.protected_ || protection.kind == Prot.Kind.public_ || protection.kind == Prot.Kind.export_) && !naked);
     }
 
     bool addPostInvariant()
     {
         auto ad = isThis();
         ClassDeclaration cd = ad ? ad.isClassDeclaration() : null;
-        return (ad && !(cd && cd.isCPPclass()) && ad.inv && global.params.useInvariants && (protection.kind == Prot.Kind.protected_ || protection.kind == Prot.Kind.public_ || protection.kind == Prot.Kind.export_) && !naked);
+        return (ad && !(cd && cd.isCPPclass()) && ad.inv && global.params.useInvariants == CHECKENABLE.on && (protection.kind == Prot.Kind.protected_ || protection.kind == Prot.Kind.public_ || protection.kind == Prot.Kind.export_) && !naked);
     }
 
     override const(char)* kind() const
@@ -2330,11 +2339,11 @@ extern (C++) class FuncDeclaration : Declaration
     extern (D) final void checkDmain()
     {
         TypeFunction tf = type.toTypeFunction();
-        const nparams = Parameter.dim(tf.parameters);
+        const nparams = tf.parameterList.length;
         bool argerr;
         if (nparams == 1)
         {
-            auto fparam0 = Parameter.getNth(tf.parameters, 0);
+            auto fparam0 = tf.parameterList[0];
             auto t = fparam0.type.toBasetype();
             if (t.ty != Tarray ||
                 t.nextOf().ty != Tarray ||
@@ -2725,7 +2734,8 @@ FuncDeclaration resolveFuncCall(const ref Loc loc, Scope* sc, Dsymbol s,
         {
             assert(fd);
 
-            if (fd.checkDisabled(loc, sc))
+            // remove when deprecation period of class allocators and deallocators is over
+            if (fd.isNewDeclaration() && fd.checkDisabled(loc, sc))
                 return null;
 
             bool hasOverloads = fd.overnext !is null;
@@ -3272,7 +3282,7 @@ extern (C++) final class CtorDeclaration : FuncDeclaration
 
     override bool addPostInvariant()
     {
-        return (isThis() && vthis && global.params.useInvariants);
+        return (isThis() && vthis && global.params.useInvariants == CHECKENABLE.on);
     }
 
     override inout(CtorDeclaration) isCtorDeclaration() inout
@@ -3314,7 +3324,7 @@ extern (C++) final class PostBlitDeclaration : FuncDeclaration
 
     override bool addPostInvariant()
     {
-        return (isThis() && vthis && global.params.useInvariants);
+        return (isThis() && vthis && global.params.useInvariants == CHECKENABLE.on);
     }
 
     override bool overloadInsert(Dsymbol s)
@@ -3373,7 +3383,7 @@ extern (C++) final class DtorDeclaration : FuncDeclaration
 
     override bool addPreInvariant()
     {
-        return (isThis() && vthis && global.params.useInvariants);
+        return (isThis() && vthis && global.params.useInvariants == CHECKENABLE.on);
     }
 
     override bool addPostInvariant()

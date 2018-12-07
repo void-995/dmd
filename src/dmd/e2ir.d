@@ -135,7 +135,6 @@ private elem *callfunc(const ref Loc loc,
         Expressions *arguments,
         elem *esel = null)      // selector for Objective-C methods (when not provided by fd)
 {
-    elem *e;
     elem *ethis = null;
     elem *eside = null;
     TypeFunction tf;
@@ -175,7 +174,7 @@ private elem *callfunc(const ref Loc loc,
     const left_to_right = tyrevfunc(ty);   // left-to-right parameter evaluation
                                            // (TYnpfunc, TYjfunc, TYfpfunc, TYf16func)
     elem* ep = null;
-    const op = fd ? intrinsic_op(fd) : -1;
+    const op = fd ? intrinsic_op(fd) : NotIntrinsic;
     if (arguments && arguments.dim)
     {
         if (op == OPvector)
@@ -188,48 +187,55 @@ private elem *callfunc(const ref Loc loc,
         /* Convert arguments[] to elems[] in left-to-right order
          */
         const n = arguments.dim;
-        elem*[5] elems_array = void;
+        debug
+            elem*[2] elems_array = void;
+        else
+            elem*[10] elems_array = void;
         import core.stdc.stdlib : malloc, free;
-        auto elems = (n <= 5) ? elems_array.ptr : cast(elem**)malloc(arguments.dim * (elem*).sizeof);
-        assert(elems);
+        auto pe = (n <= elems_array.length)
+                ? elems_array.ptr
+                : cast(elem**)malloc(arguments.dim * (elem*).sizeof);
+        assert(pe);
+        elem*[] elems = pe[0 .. n];
+
+        /* Fill elems[] with arguments converted to elems
+         */
 
         // j=1 if _arguments[] is first argument
-        int j = (tf.linkage == LINK.d && tf.varargs == 1);
+        const int j = (tf.linkage == LINK.d && tf.varargs == 1);
 
-        foreach (const i; 0 .. n)
+        foreach (const i, arg; *arguments)
         {
-            Expression arg = (*arguments)[i];
             elem *ea = toElem(arg, irs);
 
             //printf("\targ[%d]: %s\n", i, arg.toChars());
 
-            size_t nparams = Parameter.dim(tf.parameters);
-            if (i - j < nparams && i >= j)
+            if (i - j < tf.parameterList.length &&
+                i >= j &&
+                tf.parameterList[i - j].storageClass & (STC.out_ | STC.ref_))
             {
-                Parameter p = Parameter.getNth(tf.parameters, i - j);
-
-                if (p.storageClass & (STC.out_ | STC.ref_))
-                {
-                    // Convert argument to a pointer
-                    ea = addressElem(ea, arg.type.pointerTo());
-                    goto L1;
-                }
+                /* `ref` and `out` parameters mean convert
+                 * corresponding argument to a pointer
+                 */
+                elems[i] = addressElem(ea, arg.type.pointerTo());
+                continue;
             }
-            if (config.exe == EX_WIN64 && arg.type.size(arg.loc) > REGSIZE && op == -1)
+
+            if (config.exe == EX_WIN64 && arg.type.size(arg.loc) > REGSIZE && op == NotIntrinsic)
             {
                 /* Copy to a temporary, and make the argument a pointer
                  * to that temporary.
                  */
-                ea = addressElem(ea, arg.type, true);
-                goto L1;
+                elems[i] = addressElem(ea, arg.type, true);
+                continue;
             }
+
             if (config.exe == EX_WIN64 && tybasic(ea.Ety) == TYcfloat)
             {
                 /* Treat a cfloat like it was a struct { float re,im; }
                  */
                 ea.Ety = TYllong;
             }
-        L1:
             elems[i] = ea;
         }
         if (!left_to_right)
@@ -238,30 +244,21 @@ private elem *callfunc(const ref Loc loc,
              * they were already working right from the olden days before this fix
              */
             if (!(ec.Eoper == OPvar && fd.isArrayOp))
-                eside = fixArgumentEvaluationOrder(elems[0 .. n]);
+                eside = fixArgumentEvaluationOrder(elems);
         }
-        foreach (const i; 0 .. n)
+
+        foreach (ref e; elems)
         {
-            elems[i] = useOPstrpar(elems[i]);
+            e = useOPstrpar(e);
         }
 
         if (!left_to_right)   // swap order if right-to-left
-        {
-            auto i = 0;
-            auto k = n - 1;
-            while (i < k)
-            {
-                elem *tmp = elems[i];
-                elems[i] = elems[k];
-                elems[k] = tmp;
-                ++i;
-                --k;
-            }
-        }
-        ep = el_params(cast(void**)elems, cast(int)n);
+            reverse(elems);
 
-        if (elems != elems_array.ptr)
-            free(elems);
+        ep = el_params(cast(void**)elems.ptr, cast(int)n);
+
+        if (elems.ptr != elems_array.ptr)
+            free(elems.ptr);
     }
 
     objc.setupMethodSelector(fd, &esel);
@@ -312,7 +309,7 @@ private elem *callfunc(const ref Loc loc,
 
     if (fd && fd.isMember2())
     {
-        assert(op == -1);       // members should not be intrinsics
+        assert(op == NotIntrinsic);       // members should not be intrinsics
 
         AggregateDeclaration ad = fd.isThis();
         if (ad)
@@ -378,8 +375,9 @@ if (!irs.params.is64bit) assert(tysize(TYnptr) == 4);
 
     const tyret = totym(tret);
 
-    // Look for intrinsic functions
-    if (ec.Eoper == OPvar && op != -1)
+    // Look for intrinsic functions and construct result into e
+    elem *e;
+    if (ec.Eoper == OPvar && op != NotIntrinsic)
     {
         el_free(ec);
         if (OTbinary(op))
@@ -638,6 +636,11 @@ elem *addressElem(elem *e, Type t, bool alwaysCopy = false)
 
 /*****************************************
  * Convert array to a pointer to the data.
+ * Params:
+ *      t = array type
+ *      e = array to convert, it is "consumed" by the function
+ * Returns:
+ *      e rebuilt into a pointer to the data
  */
 
 elem *array_toPtr(Type t, elem *e)
@@ -659,8 +662,19 @@ elem *array_toPtr(Type t, elem *e)
             }
             else if (e.Eoper == OPpair)
             {
-                e.Eoper = OPcomma;
-                e.Ety = TYnptr;
+                if (el_sideeffect(e.EV.E1))
+                {
+                    e.Eoper = OPcomma;
+                    e.Ety = TYnptr;
+                }
+                else
+                {
+                    auto r = e;
+                    e = e.EV.E2;
+                    e.Ety = TYnptr;
+                    r.EV.E2 = null;
+                    el_free(r);
+                }
             }
             else
             {
@@ -1775,7 +1789,7 @@ elem *toElem(Expression e, IRState *irs)
                 else
                 {
                     // Multidimensional array allocations
-                    for (size_t i = 0; i < ne.arguments.dim; i++)
+                    foreach (i; 0 .. ne.arguments.dim)
                     {
                         assert(t.ty == Tarray);
                         t = t.nextOf();
@@ -1928,11 +1942,7 @@ elem *toElem(Expression e, IRState *irs)
 
         override void visit(HaltExp he)
         {
-            elem *e = el_calloc();
-            e.Ety = TYvoid;
-            e.Eoper = OPhalt;
-            elem_setLoc(e,he.loc);
-            result = e;
+            result = genHalt(he.loc);
         }
 
         /********************************************
@@ -1955,6 +1965,19 @@ elem *toElem(Expression e, IRState *irs)
                     return;
                 }
 
+                if (irs.params.checkAction == CHECKACTION.halt)
+                {
+                    /* Generate:
+                     *  ae.e1 || halt
+                     */
+                    auto econd = toElem(ae.e1, irs);
+                    auto ea = genHalt(ae.loc);
+                    auto eo = el_bin(OPoror, TYvoid, econd, ea);
+                    elem_setLoc(eo, ae.loc);
+                    result = eo;
+                    return;
+                }
+
                 e = toElem(ae.e1, irs);
                 Symbol *ts = null;
                 elem *einv = null;
@@ -1963,14 +1986,14 @@ elem *toElem(Expression e, IRState *irs)
                 FuncDeclaration inv;
 
                 // If e1 is a class object, call the class invariant on it
-                if (irs.params.useInvariants && t1.ty == Tclass &&
+                if (irs.params.useInvariants == CHECKENABLE.on && t1.ty == Tclass &&
                     !(cast(TypeClass)t1).sym.isInterfaceDeclaration() &&
                     !(cast(TypeClass)t1).sym.isCPPclass())
                 {
                     ts = symbol_genauto(Type_toCtype(t1));
                     einv = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM_DINVARIANT)), el_var(ts));
                 }
-                else if (irs.params.useInvariants &&
+                else if (irs.params.useInvariants == CHECKENABLE.on &&
                     t1.ty == Tpointer &&
                     t1.nextOf().ty == Tstruct &&
                     (inv = (cast(TypeStruct)t1.nextOf()).sym.inv) !is null)
@@ -2124,10 +2147,10 @@ elem *toElem(Expression e, IRState *irs)
 
                 ev = el_una(OPind, tym, ev);
 
-                for (size_t d = depth; d > 0; d--)
+                foreach (d; 0 .. depth)
                 {
                     e1 = be.e1;
-                    for (size_t i = 1; i < d; i++)
+                    foreach (i; 1 .. depth - d)
                         e1 = (cast(CastExp)e1).e1;
 
                     el = toElemCast(cast(CastExp)e1, el);
@@ -2749,30 +2772,74 @@ elem *toElem(Expression e, IRState *irs)
 
                     assert(ae.e2.type.ty != Tpointer);
 
-                    if (!postblit && !destructor && !irs.arrayBoundsCheck())
+                    if (!postblit && !destructor)
                     {
                         elem *ex = el_same(&eto);
 
-                        // Determine if elen is a constant
-                        elem *elen;
-                        if (eto.Eoper == OPpair &&
-                            eto.EV.E1.Eoper == OPconst)
+                        /* Returns: length of array ex
+                         */
+                        static elem *getDotLength(elem *eto, elem *ex)
                         {
-                            elen = el_copytree(eto.EV.E1);
+                            if (eto.Eoper == OPpair &&
+                                eto.EV.E1.Eoper == OPconst)
+                            {
+                                // It's a constant, so just pull it from eto
+                                return el_copytree(eto.EV.E1);
+                            }
+                            else
+                            {
+                                // It's not a constant, so pull it from the dynamic array
+                                return el_una(global.params.is64bit ? OP128_64 : OP64_32, TYsize_t, el_copytree(ex));
+                            }
+                        }
+
+                        auto elen = getDotLength(eto, ex);
+                        auto nbytes = el_bin(OPmul, TYsize_t, elen, esize);  // number of bytes to memcpy
+                        auto epto = array_toPtr(ae.e1.type, ex);
+
+                        elem *epfr;
+                        elem *echeck;
+                        if (irs.arrayBoundsCheck()) // check array lengths match and do not overlap
+                        {
+                            auto ey = el_same(&efrom);
+                            auto eleny = getDotLength(efrom, ey);
+                            epfr = array_toPtr(ae.e2.type, ey);
+
+                            // length check: (eleny == elen)
+                            auto c = el_bin(OPeqeq, TYint, eleny, el_copytree(elen));
+
+                            /* Don't check overlap if epto and epfr point to different symbols
+                             */
+                            if (!(epto.Eoper == OPaddr && epto.EV.E1.Eoper == OPvar &&
+                                  epfr.Eoper == OPaddr && epfr.EV.E1.Eoper == OPvar &&
+                                  epto.EV.E1.EV.Vsym != epfr.EV.E1.EV.Vsym))
+                            {
+                                // Add overlap check (c && (px + nbytes <= py || py + nbytes <= px))
+                                auto c2 = el_bin(OPle, TYint, el_bin(OPadd, TYsize_t, el_copytree(epto), el_copytree(nbytes)), el_copytree(epfr));
+                                auto c3 = el_bin(OPle, TYint, el_bin(OPadd, TYsize_t, el_copytree(epfr), el_copytree(nbytes)), el_copytree(epto));
+                                c = el_bin(OPandand, TYint, c, el_bin(OPoror, TYint, c2, c3));
+                            }
+
+                            // Construct: (c || arrayBoundsError)
+                            echeck = el_bin(OPoror, TYvoid, c, buildArrayBoundsError(irs, ae.loc));
                         }
                         else
                         {
-                            // It's not a constant, so pull it from the dynamic array
-                            elen = el_una(irs.params.is64bit ? OP128_64 : OP64_32, TYsize_t, el_copytree(ex));
+                            epfr = array_toPtr(ae.e2.type, efrom);
+                            efrom = null;
+                            echeck = null;
                         }
 
-                        esize = el_bin(OPmul, TYsize_t, elen, esize);
-                        elem *epto = array_toPtr(ae.e1.type, ex);
-                        elem *epfr = array_toPtr(ae.e2.type, efrom);
-                        e = el_params(esize, epfr, epto, null);
+                        /* Construct:
+                         *   memcpy(ex.ptr, ey.ptr, nbytes)[0..elen]
+                         */
+                        e = el_params(nbytes, epfr, epto, null);
                         e = el_bin(OPcall,TYnptr,el_var(getRtlsym(RTLSYM_MEMCPY)),e);
                         e = el_pair(eto.Ety, el_copytree(elen), e);
-                        e = el_combine(eto, e);
+
+                        /* Combine: eto, efrom, echeck, e
+                         */
+                        e = el_combine(el_combine(eto, efrom), el_combine(echeck, e));
                     }
                     else if ((postblit || destructor) && ae.op != TOK.blit)
                     {
@@ -3319,18 +3386,6 @@ elem *toElem(Expression e, IRState *irs)
         /***************************************
          */
 
-        override void visit(PowAssignExp e)
-        {
-            Type tb1 = e.e1.type.toBasetype();
-            assert(tb1.ty != Tarray && tb1.ty != Tsarray);
-
-            e.error("`^^` operator is not supported");
-            result = el_long(totym(e.type), 0);  // error recovery
-        }
-
-        /***************************************
-         */
-
         override void visit(LogicalExp aae)
         {
             tym_t tym = totym(aae.type);
@@ -3352,18 +3407,6 @@ elem *toElem(Expression e, IRState *irs)
         override void visit(XorExp e)
         {
             result = toElemBin(e, OPxor);
-        }
-
-        /***************************************
-         */
-
-        override void visit(PowExp e)
-        {
-            Type tb1 = e.e1.type.toBasetype();
-            assert(tb1.ty != Tarray && tb1.ty != Tsarray);
-
-            e.error("`^^` operator is not supported");
-            result = el_long(totym(e.type), 0);  // error recovery
         }
 
         /***************************************
@@ -4990,9 +5033,8 @@ elem *toElem(Expression e, IRState *irs)
             elem *e = null;
             if (te.e0)
                 e = toElem(te.e0, irs);
-            for (size_t i = 0; i < te.exps.dim; i++)
+            foreach (el; *te.exps)
             {
-                Expression el = (*te.exps)[i];
                 elem *ep = toElem(el, irs);
                 e = el_combine(e, ep);
             }
@@ -5086,12 +5128,11 @@ elem *toElem(Expression e, IRState *irs)
             if (AttribDeclaration ad = s.isAttribDeclaration())
             {
                 Dsymbols *decl = ad.include(null);
-                if (decl && decl.dim)
+                if (decl)
                 {
-                    for (size_t i = 0; i < decl.dim; i++)
+                    foreach (d; *decl)
                     {
-                        s = (*decl)[i];
-                        e = el_combine(e, Dsymbol_toElem(s));
+                        e = el_combine(e, Dsymbol_toElem(d));
                     }
                 }
             }
@@ -5157,17 +5198,16 @@ elem *toElem(Expression e, IRState *irs)
                 //printf("%s\n", tm.toChars());
                 if (tm.members)
                 {
-                    for (size_t i = 0; i < tm.members.dim; i++)
+                    foreach (sm; *tm.members)
                     {
-                        Dsymbol sm = (*tm.members)[i];
                         e = el_combine(e, Dsymbol_toElem(sm));
                     }
                 }
             }
             else if (TupleDeclaration td = s.isTupleDeclaration())
             {
-                for (size_t i = 0; i < td.objects.dim; i++)
-                {   RootObject o = (*td.objects)[i];
+                foreach (o; *td.objects)
+                {
                     if (o.dyncast() == DYNCAST.expression)
                     {   Expression eo = cast(Expression)o;
                         if (eo.op == TOK.dSymbol)
@@ -5195,22 +5235,21 @@ elem *toElem(Expression e, IRState *irs)
         elem *ElemsToStaticArray(const ref Loc loc, Type telem, Elems *elems, Symbol **psym)
         {
             // Create a static array of type telem[dim]
-            size_t dim = elems.dim;
+            const dim = elems.dim;
             assert(dim);
 
             Type tsarray = telem.sarrayOf(dim);
-            targ_size_t szelem = telem.size();
+            const szelem = telem.size();
             .type *te = Type_toCtype(telem);   // stmp[] element type
 
             Symbol *stmp = symbol_genauto(Type_toCtype(tsarray));
             *psym = stmp;
 
             elem *e = null;
-            for (size_t i = 0; i < dim; i++)
+            foreach (i, ep; *elems)
             {
                 /* Generate: *(&stmp + i * szelem) = element[i]
                  */
-                elem *ep = (*elems)[i];
                 elem *ev = el_ptr(stmp);
                 ev = el_bin(OPadd, TYnptr, ev, el_long(TYsize_t, i * szelem));
                 ev = el_una(OPind, te.Tty, ev);
@@ -5228,11 +5267,11 @@ elem *toElem(Expression e, IRState *irs)
         elem *ExpressionsToStaticArray(const ref Loc loc, Expressions *exps, Symbol **psym, size_t offset = 0, Expression basis = null)
         {
             // Create a static array of type telem[dim]
-            size_t dim = exps.dim;
+            const dim = exps.dim;
             assert(dim);
 
             Type telem = ((*exps)[0] ? (*exps)[0] : basis).type;
-            targ_size_t szelem = telem.size();
+            const szelem = telem.size();
             .type *te = Type_toCtype(telem);   // stmp[] element type
 
             if (!*psym)
@@ -5428,6 +5467,13 @@ private elem *fillHole(Symbol *stmp, size_t *poffset, size_t offset2, size_t max
     return e;
 }
 
+/*************************************************
+ * Params:
+ *      op = TOK.assign, TOK.construct, TOK.blit
+ *      fillHoles = Fill in alignment holes with zero. Set to
+ *                  false if allocated by operator new, as the holes are already zeroed.
+ */
+
 private elem *toElemStructLit(StructLiteralExp sle, IRState *irs, TOK op, Symbol *sym, bool fillHoles)
 {
     //printf("[%s] StructLiteralExp.toElem() %s\n", sle.loc.toChars(), sle.toChars());
@@ -5435,6 +5481,8 @@ private elem *toElemStructLit(StructLiteralExp sle, IRState *irs, TOK op, Symbol
 
     if (sle.useStaticInit)
     {
+        /* Use the struct declaration's init symbol
+         */
         elem *e = el_var(toInitializer(sle.sd));
         e.ET = Type_toCtype(sle.sd.type);
         elem_setLoc(e, sle.loc);
@@ -5518,7 +5566,7 @@ private elem *toElemStructLit(StructLiteralExp sle, IRState *irs, TOK op, Symbol
         Lagain:
             size_t holeEnd = structsize;
             size_t offset2 = structsize;
-            for (size_t j = i + 1; j < vend; j++)
+            foreach (j; i + 1 .. vend)
             {
                 VarDeclaration vx = sle.sd.fields[j];
                 if (!vx.overlapped)
@@ -5551,9 +5599,8 @@ private elem *toElemStructLit(StructLiteralExp sle, IRState *irs, TOK op, Symbol
 
     // CTFE may fill the hidden pointer by NullExp.
     {
-        for (size_t i = 0; i < dim; i++)
+        foreach (i, el; *sle.elements)
         {
-            Expression el = (*sle.elements)[i];
             if (!el)
                 continue;
 
@@ -5901,6 +5948,10 @@ elem *buildArrayBoundsError(IRState *irs, const ref Loc loc)
     {
         return callCAssert(irs, loc, null, null, "array overflow");
     }
+    if (irs.params.checkAction == CHECKACTION.halt)
+    {
+        return genHalt(loc);
+    }
     auto eassert = el_var(getRtlsym(RTLSYM_DARRAYP));
     auto efile = toEfilenamePtr(cast(Module)irs.blx._module);
     auto eline = el_long(TYint, loc.linnum);
@@ -5957,16 +6008,18 @@ void toTraceGC(IRState *irs, elem *e, const ref Loc loc)
         assert(e.Eoper == OPcall);
         elem *e1 = e.EV.E1;
         assert(e1.Eoper == OPvar);
-        for (size_t i = 0; 1; ++i)
+
+        auto s = e1.EV.Vsym;
+        foreach (ref m; map)
         {
-            assert(i < map.length);
-            if (e1.EV.Vsym == getRtlsym(map[i][0]))
+            if (s == getRtlsym(m[0]))
             {
-                e1.EV.Vsym = getRtlsym(map[i][1]);
-                break;
+                e1.EV.Vsym = getRtlsym(m[1]);
+                e.EV.E2 = el_param(e.EV.E2, filelinefunction(irs, loc));
+                return;
             }
         }
-        e.EV.E2 = el_param(e.EV.E2, filelinefunction(irs, loc));
+        assert(0);
     }
 }
 
@@ -6056,6 +6109,22 @@ elem *callCAssert(IRState *irs, const ref Loc loc, Expression exp, Expression em
         ea = el_bin(OPcall, TYvoid, eassert, el_params(eline, efilename, elmsg, null));
     }
     return ea;
+}
+
+/********************************************
+ * Generate HALT instruction.
+ * Params:
+ *      loc = location to use for debug info
+ * Returns:
+ *      generated instruction
+ */
+elem *genHalt(const ref Loc loc)
+{
+    elem *e = el_calloc();
+    e.Ety = TYvoid;
+    e.Eoper = OPhalt;
+    elem_setLoc(e, loc);
+    return e;
 }
 
 /*************************************************

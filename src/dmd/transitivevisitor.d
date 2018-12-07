@@ -459,6 +459,11 @@ package mixin template ParseVisitMethods(AST)
         t.upr.accept(this);
     }
 
+    override void visit(AST.TypeTraits t)
+    {
+        t.exp.accept(this);
+    }
+
 //      Miscellaneous
 //========================================================
 
@@ -560,7 +565,7 @@ package mixin template ParseVisitMethods(AST)
     override void visit(AST.CompileDeclaration d)
     {
         //printf("Visiting compileDeclaration\n");
-        d.exp.accept(this);
+        visitArgs(d.exps);
     }
 
     override void visit(AST.UserAttributeDeclaration d)

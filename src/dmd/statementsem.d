@@ -1123,7 +1123,7 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                             fparam.type.nextOf().ty == Tfunction)
                         {
                             TypeFunction tf = cast(TypeFunction)fparam.type.nextOf();
-                            foreachParamCount = Parameter.dim(tf.parameters);
+                            foreachParamCount = tf.parameterList.length;
                             foundMismatch = true;
                         }
                     }
@@ -1229,6 +1229,11 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
 
                     if (dim == 2 && i == 0)
                     {
+                        if (!p.type.isintegral())
+                        {
+                            fs.error("foreach: key cannot be of non-integral type `%s`", p.type.toChars());
+                            goto case Terror;
+                        }
                         var = new VarDeclaration(loc, p.type.mutableOf(), Identifier.generateId("__key"), null);
                         var.storage_class |= STC.temp | STC.foreach_;
                         if (var.storage_class & (STC.ref_ | STC.out_))
@@ -1255,6 +1260,11 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                                 goto case Terror;
                             }
                             fs.key.range = new IntRange(SignExtendedNumber(0), dimrange.imax);
+                        }
+                        else if (!Type.tsize_t.implicitConvTo(var.type))
+                        {
+                            fs.deprecation("foreach: loop index implicitly converted from `size_t` to `%s`",
+                                           fs.key.type.toChars());
                         }
                     }
                     else
@@ -1322,6 +1332,10 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                     Identifier idkey = Identifier.generateId("__key");
                     fs.key = new VarDeclaration(loc, Type.tsize_t, idkey, null);
                     fs.key.storage_class |= STC.temp;
+                }
+                else if (fs.key.type.ty != Tsize_t)
+                {
+                    tmp_length = new CastExp(loc, tmp_length, fs.key.type);
                 }
                 if (fs.op == TOK.foreach_reverse_)
                     fs.key._init = new ExpInitializer(loc, tmp_length);
@@ -1606,7 +1620,7 @@ private extern (C++) final class StatementSemanticVisitor : Visitor
                         //printf("tfld = %s\n", tfld.toChars());
                         if (tfld.parameters.dim == 1)
                         {
-                            Parameter p = Parameter.getNth(tfld.parameters, 0);
+                            Parameter p = tfld.parameterList[0];
                             if (p.type && p.type.ty == Tdelegate)
                             {
                                 auto t = p.type.typeSemantic(loc, sc2);
@@ -1900,7 +1914,7 @@ else
             p.type = p.type.addStorageClass(p.storageClass);
             if (tfld)
             {
-                Parameter prm = Parameter.getNth(tfld.parameters, i);
+                Parameter prm = tfld.parameterList[i];
                 //printf("\tprm = %s%s\n", (prm.storageClass&STC.ref_?"ref ":"").ptr, prm.ident.toChars());
                 stc = prm.storageClass & STC.ref_;
                 id = p.ident; // argument copy is not need.
@@ -2571,20 +2585,31 @@ else
             CompoundStatement cs;
             Statement s;
 
-            if (global.params.useSwitchError == CHECKENABLE.on)
+            if (global.params.useSwitchError == CHECKENABLE.on &&
+                global.params.checkAction != CHECKACTION.halt)
             {
-                Expression sl = new IdentifierExp(ss.loc, Id.empty);
-                sl = new DotIdExp(ss.loc, sl, Id.object);
-                sl = new DotIdExp(ss.loc, sl, Id.__switch_error);
+                if (global.params.checkAction == CHECKACTION.C)
+                {
+                    /* Rewrite as an assert(0) and let e2ir generate
+                     * the call to the C assert failure function
+                     */
+                    s = new ExpStatement(ss.loc, new AssertExp(ss.loc, new IntegerExp(ss.loc, 0, Type.tint32)));
+                }
+                else
+                {
+                    Expression sl = new IdentifierExp(ss.loc, Id.empty);
+                    sl = new DotIdExp(ss.loc, sl, Id.object);
+                    sl = new DotIdExp(ss.loc, sl, Id.__switch_error);
 
-                Expressions* args = new Expressions();
-                args.push(new StringExp(ss.loc, cast(char*) ss.loc.filename));
-                args.push(new IntegerExp(ss.loc.linnum));
+                    Expressions* args = new Expressions();
+                    args.push(new StringExp(ss.loc, cast(char*) ss.loc.filename));
+                    args.push(new IntegerExp(ss.loc.linnum));
 
-                sl = new CallExp(ss.loc, sl, args);
-                sl.expressionSemantic(sc);
+                    sl = new CallExp(ss.loc, sl, args);
+                    sl.expressionSemantic(sc);
 
-                s = new SwitchErrorStatement(ss.loc, sl);
+                    s = new SwitchErrorStatement(ss.loc, sl);
+                }
             }
             else
                 s = new ExpStatement(ss.loc, new HaltExp(ss.loc));

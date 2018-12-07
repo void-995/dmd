@@ -156,9 +156,12 @@ private int tryMain(size_t argc, const(char)** argv)
     // Set default values
     global.params.argv0 = arguments[0].toDString;
 
-    // Temporary: Use 32 bits as the default on Windows, for config parsing
+    // Temporary: Use 32 bits OMF as the default on Windows, for config parsing
     static if (TARGET.Windows)
+    {
         global.params.is64bit = false;
+        global.params.mscoff = false;
+    }
 
     global.inifilename = parse_conf_arg(&arguments);
     if (global.inifilename)
@@ -334,9 +337,14 @@ private int tryMain(size_t argc, const(char)** argv)
     }
     if (global.params.release)
     {
-        global.params.useInvariants = false;
-        global.params.useIn = false;
-        global.params.useOut = false;
+        if (global.params.useInvariants == CHECKENABLE._default)
+            global.params.useInvariants = CHECKENABLE.off;
+
+        if (global.params.useIn == CHECKENABLE._default)
+            global.params.useIn = CHECKENABLE.off;
+
+        if (global.params.useOut == CHECKENABLE._default)
+            global.params.useOut = CHECKENABLE.off;
 
         if (global.params.useArrayBounds == CHECKENABLE._default)
             global.params.useArrayBounds = CHECKENABLE.safeonly;
@@ -347,6 +355,30 @@ private int tryMain(size_t argc, const(char)** argv)
         if (global.params.useSwitchError == CHECKENABLE._default)
             global.params.useSwitchError = CHECKENABLE.off;
     }
+    else
+    {
+        if (global.params.useInvariants == CHECKENABLE._default)
+            global.params.useInvariants = CHECKENABLE.on;
+
+        if (global.params.useIn == CHECKENABLE._default)
+            global.params.useIn = CHECKENABLE.on;
+
+        if (global.params.useOut == CHECKENABLE._default)
+            global.params.useOut = CHECKENABLE.on;
+
+        if (global.params.useArrayBounds == CHECKENABLE._default)
+            global.params.useArrayBounds = CHECKENABLE.on;
+
+        if (global.params.useAssert == CHECKENABLE._default)
+            global.params.useAssert = CHECKENABLE.on;
+
+        if (global.params.useSwitchError == CHECKENABLE._default)
+            global.params.useSwitchError = CHECKENABLE.on;
+    }
+
+    if (global.params.useUnitTests)
+        global.params.useAssert = CHECKENABLE.on;
+
     if (global.params.betterC)
     {
         global.params.checkAction = CHECKACTION.C;
@@ -354,17 +386,7 @@ private int tryMain(size_t argc, const(char)** argv)
         global.params.useTypeInfo = false;
         global.params.useExceptions = false;
     }
-    if (global.params.useUnitTests)
-        global.params.useAssert = CHECKENABLE.on;
 
-    if (global.params.useArrayBounds == CHECKENABLE._default)
-        global.params.useArrayBounds = CHECKENABLE.on;
-
-    if (global.params.useAssert == CHECKENABLE._default)
-        global.params.useAssert = CHECKENABLE.on;
-
-    if (global.params.useSwitchError == CHECKENABLE._default)
-        global.params.useSwitchError = CHECKENABLE.on;
 
     if (!global.params.obj || global.params.lib)
         global.params.link = false;
@@ -540,6 +562,20 @@ private int tryMain(size_t argc, const(char)** argv)
             }
         }
         m.parse();
+        if (m.isHdrFile)
+        {
+            // Remove m's object file from list of object files
+            for (size_t j = 0; j < global.params.objfiles.dim; j++)
+            {
+                if (m.objfile.name.toChars() == global.params.objfiles[j])
+                {
+                    global.params.objfiles.remove(j);
+                    break;
+                }
+            }
+            if (global.params.objfiles.dim == 0)
+                global.params.link = false;
+        }
         if (m.isDocFile)
         {
             anydocfiles = true;
@@ -581,6 +617,8 @@ private int tryMain(size_t argc, const(char)** argv)
          */
         foreach (m; modules)
         {
+            if (m.isHdrFile)
+                continue;
             if (global.params.verbose)
                 message("import    %s", m.toChars());
             genhdrfile(m);
@@ -740,25 +778,33 @@ private int tryMain(size_t argc, const(char)** argv)
     }
     else if (global.params.oneobj)
     {
-        if (modules.dim)
-            obj_start(modules[0].srcfile.toChars());
+        Module firstm;    // first module we generate code for
         foreach (m; modules)
         {
+            if (m.isHdrFile)
+                continue;
+            if (!firstm)
+            {
+                firstm = m;
+                obj_start(cast(char*)m.srcfile.toChars());
+            }
             if (global.params.verbose)
                 message("code      %s", m.toChars());
             genObjFile(m, false);
             if (entrypoint && m == rootHasMain)
                 genObjFile(entrypoint, false);
         }
-        if (!global.errors && modules.dim)
+        if (!global.errors && firstm)
         {
-            obj_end(library, modules[0].objfile);
+            obj_end(library, firstm.objfile);
         }
     }
     else
     {
         foreach (m; modules)
         {
+            if (m.isHdrFile)
+                continue;
             if (global.params.verbose)
                 message("code      %s", m.toChars());
             obj_start(m.srcfile.toChars());
@@ -912,7 +958,7 @@ int main()
  *   envvalue = The content of an environment variable
  *   args     = Array to append the flags to, if any.
  */
-private void getenv_setargv(const(char)* envvalue, Strings* args)
+void getenv_setargv(const(char)* envvalue, Strings* args)
 {
     if (!envvalue)
         return;
@@ -999,7 +1045,7 @@ private void getenv_setargv(const(char)* envvalue, Strings* args)
  *   "32", "64" or "32mscoff" if the "-m32", "-m64", "-m32mscoff" flags were passed,
  *   respectively. If they weren't, return `arch`.
  */
-private const(char)* parse_arch_arg(Strings* args, const(char)* arch)
+const(char)* parse_arch_arg(Strings* args, const(char)* arch)
 {
     foreach (const p; *args)
     {
@@ -1024,7 +1070,7 @@ private const(char)* parse_arch_arg(Strings* args, const(char)* arch)
  * Returns:
  *   The 'path' in -conf=path, which is the path to the config file to use
  */
-private const(char)* parse_conf_arg(Strings* args)
+const(char)* parse_conf_arg(Strings* args)
 {
     const(char)* conf = null;
     foreach (const p; *args)
@@ -1331,6 +1377,23 @@ private void setTargetCPU(ref Param params)
         params.cpu = CPU.x87;   // cannot support other instruction sets
 }
 
+/**************************************
+ * we want to write the mixin expansion file also on error, but there
+ * are too many ways to terminate dmd (e.g. fatal() which calls exit(EXIT_FAILURE)),
+ * so we cant use scope(exit) ...
+ * so we do it with atexit(&flushMixins);
+ */
+extern(C) void flushMixins()
+{
+    if (!global.params.mixinOut)
+        return;
+
+    assert(global.params.mixinFile);
+    auto f = File(global.params.mixinFile);
+    OutBuffer* ob = global.params.mixinOut;
+    f.setbuffer(cast(void*)ob.data, ob.offset);
+    f.write();
+}
 
 /****************************************************
  * Parse command line arguments.
@@ -1346,7 +1409,7 @@ private void setTargetCPU(ref Param params)
  *      true if errors in command line
  */
 
-private bool parseCommandLine(const ref Strings arguments, const size_t argc, ref Param params, ref Strings files)
+bool parseCommandLine(const ref Strings arguments, const size_t argc, ref Param params, ref Strings files)
 {
     bool errors;
 
@@ -1429,28 +1492,45 @@ private bool parseCommandLine(const ref Strings arguments, const size_t argc, re
         if (arg == "-allinst")               // https://dlang.org/dmd.html#switch-allinst
             params.allInst = true;
         else if (arg == "-de")               // https://dlang.org/dmd.html#switch-de
-            params.useDeprecated = 0;
+            params.useDeprecated = Diagnostic.error;
         else if (arg == "-d")                // https://dlang.org/dmd.html#switch-d
-            params.useDeprecated = 1;
+            params.useDeprecated = Diagnostic.off;
         else if (arg == "-dw")               // https://dlang.org/dmd.html#switch-dw
-            params.useDeprecated = 2;
+            params.useDeprecated = Diagnostic.inform;
         else if (arg == "-c")                // https://dlang.org/dmd.html#switch-c
             params.link = false;
+        else if (startsWith(p + 1, "checkaction=")) // https://dlang.org/dmd.html#switch-checkaction
+        {
+            /* Parse:
+             *    -checkaction=D|C|halt
+             */
+            if (strcmp(p + 13, "D") == 0)
+                params.checkAction = CHECKACTION.D;
+            else if (strcmp(p + 13, "C") == 0)
+                params.checkAction = CHECKACTION.C;
+            else if (strcmp(p + 13, "halt") == 0)
+                params.checkAction = CHECKACTION.halt;
+            else
+                goto Lerror;
+        }
         else if (startsWith(p + 1, "color")) // https://dlang.org/dmd.html#switch-color
         {
-            params.color = true;
             // Parse:
             //      -color
-            //      -color=on|off
+            //      -color=auto|on|off
             if (p[6] == '=')
             {
-                if (strcmp(p + 7, "off") == 0)
+                if (strcmp(p + 7, "on") == 0)
+                    params.color = true;
+                else if (strcmp(p + 7, "off") == 0)
                     params.color = false;
-                else if (strcmp(p + 7, "on") != 0)
+                else if (strcmp(p + 7, "auto") != 0)
                     goto Lerror;
             }
             else if (p[6])
                 goto Lerror;
+            else
+                params.color = true;
         }
         else if (startsWith(p + 1, "conf=")) // https://dlang.org/dmd.html#switch-conf
         {
@@ -1494,6 +1574,17 @@ private bool parseCommandLine(const ref Strings arguments, const size_t argc, re
             params.map = true;
         else if (arg == "-multiobj")
             params.multiobj = true;
+        else if (startsWith(p + 1, "mixin="))
+        {
+            auto tmp = p + 6 + 1;
+            if (!tmp[0])
+                goto Lnoarg;
+            // The following are usedin atexit, so we can't rely on main's argv...
+            params.mixinFile = mem.xstrdup(tmp);
+            // ... or the GC's memory being valid.
+            params.mixinOut = cast(OutBuffer*)calloc(1, OutBuffer.sizeof);
+            atexit(&flushMixins);
+        }
         else if (arg == "-g") // https://dlang.org/dmd.html#switch-g
             params.symdebug = 1;
         else if (arg == "-gf")
@@ -1695,9 +1786,9 @@ private bool parseCommandLine(const ref Strings arguments, const size_t argc, re
                 goto Lerror;
         }
         else if (arg == "-w")   // https://dlang.org/dmd.html#switch-w
-            params.warnings = 1;
+            params.warnings = Diagnostic.error;
         else if (arg == "-wi")  // https://dlang.org/dmd.html#switch-wi
-            params.warnings = 2;
+            params.warnings = Diagnostic.inform;
         else if (arg == "-O")   // https://dlang.org/dmd.html#switch-O
             params.optimize = true;
         else if (p[1] == 'o')
